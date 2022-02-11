@@ -1,0 +1,106 @@
+# 명령어 단축
+git config --global alias.co checkout
+git config --global alias.ci commit
+git config --global alias.st status
+
+# 로그보기
+git log --name-status
+git --no-pager log 
+git reflog
+git --no-pager log --name-status
+
+# 어제 커밋한거 보기
+git show master@{yesterday}
+
+브랜치 포함한 로그
+git log --branches --graph
+
+# 파일명 변경
+git mv a.txt b.txt
+
+# 원복하기
+특정파일만 원복
+git checkout -- a.txt
+
+수정했던 내용 전체 원복
+git reset --hard HEAD
+
+add 한것 원복
+git reset HEAD 파일명 또는 디렉토리명
+
+
+# 마스터브랜치만 로그보기
+git log -g master
+
+# 커밋취소
+git reset HEAD^ (가장 최신 커밋 1개 취소(삭제))
+git reset HEAD^^(가장 최신 커밋 2개 취소(삭제)) -> 이건 위험할수있다. 한번의 커밋을 취소하는건 소스가 남아있지만 두번 취소해버리면 가장 마지막의 소스는 사라지기 때문에 복구할 방법이 없다.
+
+
+# 이전버전으로 돌리기
+git revert HEAD -m 1
+(이건 커밋도 동시에 일어남)
+
+# 특정버전으로 돌리기
+TODO
+
+
+# 이전 버전과 비교
+git log -p  -1
+git diff HEAD@{1} filename
+
+# 브랜치와 비교
+git log -p master..branch
+
+
+# 변경목록 보기
+git status
+git status . ( 현디렉토리 변경사항만보기 )
+파일시간만 바뀌어도 목록에 표시된다.
+내용이 바뀐것만 표시되게 할순 없나?
+
+
+# 삭제하기
+git rm tempup
+git rm -r tempup
+
+# merge
+git merge 브랜치명
+충돌난것들은 수정후 git add 해주고
+git ci  하면 vi 에디터 뜨면 편집후 저장
+
+브랜치에서 master 의 변경을 합칠때
+git checkout branch
+git merge master
+
+
+# remote 저장소 보기
+git remote -v
+
+# remote 저장소 연결 끊기
+git remote remove origin
+
+# remote 저장소 추가
+git remote add origin git@gitlab.com:jbbuller/jbbuller_android.git
+
+# 브랜치 만들기
+git branch br1
+
+# 브랜치 전환
+git checkout br1
+
+# 브랜치 전환하려는데 작업중인게 있다면 갈무리하기=>stash
+git stash
+
+# 갈무리한거 복구하기
+git stash apply
+
+# stash 관리
+git stash list
+git stash clear (모두지우기)
+
+# stash 이름변경
+git stash drop stash@{0}
+git stash store -m "_car_order_list_done 테이블 삭제작업" 19c8fa4d418c1c7ad9abd38e59ae12eeaf8b8ebd
+
+

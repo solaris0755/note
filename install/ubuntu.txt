@@ -1,0 +1,76 @@
+#####################################################
+# nginx + php-fpm + mariadb-server Install Guide
+# ( Under Ubuntu 20 LTS )
+#####################################################
+
+/* install utils */
+# apt install vim git curl
+
+/* install npm, composer, node */
+# apt install npm composer
+
+/* ssh */
+# ssh-keygen
+
+/* install nginx,php,mariadb */
+# apt install nginx
+# apt install php-fpm
+# apt install mariadb-server
+# apt install mariadb-client
+
+/* install php modules */
+# apt install php-curl php-gd php-imagick php-json php-mbstring php-mysql 
+
+/* install php-mcrypt */
+# apt install -y build-essential
+# apt install php php-pear php-dev libmcrypt-dev
+# pecl channel-update pecl.php.net
+# pecl update-channels
+# pecl search mcrypt
+# pecl install mcrypt
+
+/* php.ini configure */
+# vi /etc/php/7.4/fpm/php.ini
+	you should add "extension=mcrypt.so" to php.ini
+	TODO
+
+/* nginx configure */
+# cd /etc/nginx/
+# mv sites-enabled/default conf.d/default.conf
+# vi conf.d/default.conf
+	root /home/dev/www
+	index ... index.php ...
+	fastcgi .. php7.4-fpm.sock;
+ 
+/* mysql configure */
+# mysql_secure_installation
+
+/* install pm2 */
+# npm install pm2 -g
+
+/* install nvm */
+$ curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.0/install.sh | bash
+/* 
+nvm ls-remote
+nvm install 14.15.5
+nvm ls-remote
+nvm use 9.11.2
+nvm install 9.11.2
+node -v
+*/
+
+
+#####################################################
+# jbbuller setting
+#####################################################
+/* web root */
+$ cd /home/dev
+$ git clone git@gitlab.com:jbbuller/jbbuller.git www
+
+$ rsync -av dev:/home/dev/data .
+$ cd www
+$ ln -s ../data/datas .
+$ vi datas/dbconfig.php
+
+
+

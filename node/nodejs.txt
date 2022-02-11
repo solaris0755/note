@@ -1,0 +1,15 @@
+# 가이드 문서
+https://fred16157.github.io/node.js/nodejs-express-server-basic/
+
+# CORS 이슈해결하기
+
+# ejs
+
+# Modern Javascript 공부 필요
+
+# Socket.io 버전
+에 따라서 라이브러리가 틀려진다.
+버전확인법
+
+마이그레이션 가이드 : http://socket.io/docs/migrating-from-0-9/
+

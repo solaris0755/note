@@ -1,0 +1,189 @@
+Laravel
+
+
+Nom, gulp, elixir, less, sass
+
+Npm install error 는 왜 날까
+
+Vendor 에는 수동으로 추가하나? Jenssegers 패키지는 어떻게 추가한건가?
+
+composer require jenssegers/agent
+
+Roumen  Feed 는 관리기 안되므로 삭제하도록 하자.
+
+Nh 디렉토리와 비교해서 체크해보자.
+
+
+Composer.json 과 vendor 그리고 배포 이슈
+Composer.json 만 있으면 composer update 하면 vendor에 다운로드 된다.
+
+
+NH Motors 
+[root@motors1 web]# php artisan --version
+Laravel Framework version 5.3.28
+
+8/4 수요일
+라라벨8 에 route 및 기본 클래스에 작업했던 내용 적용중인데  외부패키지를 적용하는데 잘 안되네.. useragent 를 구분하는 패키지
+########################
+# Laravel Install
+composer create-project --prefer-dist laravel/laravel nhmotors
+git init
+git add .
+git commit -m ‘init’ .
+
+
+.env 파일 복사
+
+
+# 외부 패키지 가져오기
+composer require roumen/feed
+composer require laravelium/feed
+
+composer require jenssegers/agent
+근데 php 에러가 나는 상황에서는 이명령어가 실행이 안되니 우선 에러를 해결한후에 수행해야한다.
+
+# 외부 패키지 alias 선언
+외부 클래스를 가져오게 되면 config/app.php 에 해당클래스를 추가해야한다.
+
+# config 관련
+M	config/services.php
+M	config/view.php
+
+# 기존 작업 파일 Controller 복사하기
+A	app/Console/Commands/EventApi.php
+A	app/Http/Controllers/Api/Reservations.php
+A	app/Http/Controllers/Customer/ViewController.php
+A	app/Http/Controllers/FeedController.php
+A	app/Http/Controllers/MainController.php
+A	app/Http/Controllers/Reservation/RepairController.php
+A	app/Http/Controllers/Service/ViewController.php
+A	app/Services/EventApiService.php
+
+➜  nhmotors git:(master) ✗ mkdir -p app/Console/Commands 
+➜  nhmotors git:(master) ✗ mkdir -p app/Http/Controllers/Api
+➜  nhmotors git:(master) ✗ mkdir -p app/Http/Controllers/Service
+➜  nhmotors git:(master) ✗ mkdir -p app/Http/Controllers/Customer
+➜  nhmotors git:(master) ✗ mkdir -p app/Http/Controllers/Reservation
+➜  nhmotors git:(master) ✗ mkdir -p app/Services      
+
+# phpstorm ide-helper 클래스 추가
+여기서 문제점이 발생한다
+PHPStorm 은 alias 로 선언된 DB, Config 등의 클래스를 인식하지 못한다.
+아래와 같이 해줘야 인식을 한다.
+➜  nhmotors git:(master) ✗ php artisan ide-helper:generate 
+
+* 참고 ( 컨트롤러 만들기 )
+php artisan make:controller FeedController
+명령어를 통해서 클래스를 만들었다. 
+
+# 그누보드 소스 가져오기
+➜  nhmotors git:(master) ✗ rsync -av ../nh/public/board   public
+➜  nhmotors git:(master) ✗ rsync -av ../nh/data .
+.gitignore 에 data 추가
+
+#  core 부분 수정
+M	app/Http/Controllers/Controller.php  ; 도메인에 따라 모바일인지 데스크톱버전인지 분기
+M	app/Providers/AppServiceProvider.php ; 그누보드랑 연동하기위한 부분 추가
+
+
+# routes 관련 수정 
+M	routes/api.php
+M	routes/web.php
+
+여기에서 Api\Reservations 클래스 못찾겠다고 나옴...
+이럴때는 클래스의 namespace 전체경로로 변경한다.
+
+# assets 디렉토리 복사
+desktop, mobile 에 사용되는 이미지 css js 등이 있다.
+➜  nhmotors git:(master) ✗ git add assets
+
+
+# view template 추가 ( blade )
+➜  nhmotors git:(master) ✗ git add resources/views/*
+
+########################
+# gulp
+
+버전이 올라가서 새로운 버전에 맞게 gulpfile.js 를 수정해줘야 할것 같다.
+
+➜  nhmotors git:(master) ✗ sudo npm install --global gulp
+
+
+npm install gulp-webserver gulp-concat gulp-uglify gulp-minify-html gulp-sass gulp-livereload --save-dev
+
+
+TODO : npm install laravel-elixir --save-dev 이것도 에러나고 뭔가 설치가 제대로 안된다.
+TODO : gulp 실행도 안된다.
+TODO : 이건 별도의  HelloWorld 프로젝트로 진행하자.
+
+gulp 강의 
+https://programmingsummaries.tistory.com/356
+
+https://gulpjs.com/
+
+##  기본 세팅 및 활용
+https://www.youtube.com/watch?v=HB2T0iWiW50
+동영상을 보면서 따라해보자.
+
+https://www.jetbrains.com/help/phpstorm/laravel.html#debugging-blade-templates
+PHPstorm 공식 페이지에서도 검색해보면 나온다.
+
+
+assets/src/package.json 이 있음
+npm install 수행
+gulp 수행 ; 
+gulpfile.js 에 경로 잘못된 부분 수정하고
+근데 에러   ReferenceError: primordials is not defined in node 에러
+이건 노드 버전을 낮춰주면 해결됨  (11 버전으로 )
+
+curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.0/install.sh | bash\nexport NVM_DIR="$HOME/.nvm"\n[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"\n
+
+nvm ls-remote
+nvm install v11.15.0
+
+그러고보면 노드버전이 너무 높으면 안되는것이 많다.
+
+gulp 실행하면 dist/*.js 가 만들어진다. dist 디렉토리아래에 있는걸 .gitignore 시키는 효율적인 방법은 TODO
+
+########################
+# EJS
+왜 ejs 까지 쓴것인가?ㅌ
+
+
+########################
+# Blade
+
+
+########################
+# ES6
+
+
+npm & yarn & node & gulp & bower & elixer & mix
+
+
+# gulp 4.0 설치하기
+npm install gulp-cli -g
+npm install gulp@4.0.0
+
+
+# npm사용시 node-gyp rebuild error
+https://gseok.gitbooks.io/node-and-npm/content/node-npmc0ac-c6a9-c2dc-node-gyp-rebuild-error.html
+
+# npm install 시 에러
+
+이걸 어떻게 해결할까?
+
+# gulp 시 에러
+
+# npm 모듈 목록
+➜  ~ npm ls -g 
+/usr/local/lib
+├── bower@1.8.12
+├── gulp-cli@2.3.0
+├── node-gyp@8.1.0
+├── npm@7.19.1
+└── pm2@5.1.0
+
+#  webpack.mix.js
+
+

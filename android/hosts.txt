@@ -1,0 +1,26 @@
+https://pilot376.tistory.com/72
+
+안드로이드 터미널에서 
+cd ~/Library/Android/sdk/emulator
+./emulator -avd test -writable-system
+
+안드로이드 터미널에서 + 로 새창 열고
+cd ~/Library/Android/sdk/platform-tools 
+# 에뮬레이터 이름 확인
+./adb devices
+
+( 오프라인이라면 Ctrl+C 눌러서 에뮬레이터를 죽이고 다시 실행한다 )
+
+# 루트권한 획득
+./adb -s emulator-5554 root
+./adb -s emulator-5554 remount
+
+# 호스트파일 복사
+./adb -s emulator-5554 pull ./system/etc/hosts ~/
+
+# hosts 파일 수정
+에뮬레이터에서 PC 로 접근하는것은 10.0.2.2 이다.
+
+# 수정한 파일을 에뮬레이터로 복사
+./adb -s emulator-5554 push ~/hosts ./system/etc/hosts
+

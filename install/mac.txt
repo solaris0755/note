@@ -1,0 +1,284 @@
+[ BigSur 개발환경 ]
+https://subicura.com/2017/11/22/mac-os-development-environment-setup.html
+
+brew install homebrew/cask-fonts/font-d2coding
+brew install iterm2 
+
+# oh-my-zsh 설치
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/robbyrussell/oh-my-zsh/master/tools/install.sh)"
+chmod -R go-w '/usr/local/share/zsh'
+
+# zsh 플러그인 설치
+brew install zsh-completions fasd
+git clone https://github.com/zsh-users/zsh-syntax-highlighting.git $ZSH_CUSTOM/plugins/zsh-syntax-highlighting
+git clone git://github.com/zsh-users/zsh-autosuggestions $ZSH_CUSTOM/plugins/zsh-autosuggestions
+
+~/.zshrc 를 열어서 다음과 같이 변경하여 활성화시켜준다.
+plugins=(git zsh-syntax-highlighting zsh-autosuggestions)
+
+# neovim 설치
+brew install neovim
+brew tap homebrew/cask-fonts # 개발용 폰트 설치
+
+~/.zshrc
+alias vim="nvim"
+alias vi="nvim"
+alias vimdiff="nvim -d"
+export EDITOR=/usr/local/bin/nvim
+
+# vim 플러그인
+curl -sLf https://spacevim.org/install.sh | bash
+설치가 완료되면 vi를 실행합니다. 최초 실행 시 mode 설정을 물어보고 (잘모르면 1을 누릅니다) q를 눌러 종료했다가 다시 실행하면 자동으로 플러그인을 설치합니다. 플러그인이 많아서 시간이 꽤 걸립니다.
+
+/Users/hong/.SpaceVim.d/init.toml
+
+[options]
+default_indent = 4
+
+
+
+# fzf 설치 
+brew install fzf
+~/.zshrc 에서 plugin 에 fzf 추가
+
+
+
+[ Mac 에 nginx + php7.4 설치 ]
+brew 설치
+/usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+
+https://velog.io/@davelee/mac%EC%9D%98-nginx%EC%97%90-php-%EC%97%B0%EB%8F%99%ED%95%98%EA%B8%B0
+https://brunch.co.kr/@gshn/3
+
+php 의 위치 : /usr/local/opt/php@7.4/bin
+
+brew services restart php@7.4
+brew services restart nginx
+brew services restart mariadb
+
+# brew 로 설치한 모듈들을 업그레이드해준다 ( php, nginx, mariadb 등 )
+brew upgrade 
+
+maria db 설정
+sudo mariadb-secure-installation
+
+set password for 'root'@localhost = password('');
+
+
+php 경로 변경
+~/.zshrc
+export PATH="/usr/local/opt/php@7.4/bin:$PATH"
+export PATH="/usr/local/opt/php@7.4/sbin:$PATH"
+
+
+
+로그디렉토리
+/usr/local/var/log/nginx
+/usr/local/etc/php/7.4/php.ini
+
+XDebug 설치
+# 설치
+$ pecl install xdebug
+
+Installing '/usr/local/Cellar/php@7.4/7.4.22/pecl/20190902/xdebug.so'
+install ok: channel://pecl.php.net/xdebug-3.0.4
+Extension xdebug enabled in php.ini
+
+# php.ini 에 아래내용 추가
+$ vi /usr/local/etc/php/7.4/php.ini
+
+[xdebug]
+zend_extension="/usr/local/Cellar/php@7.4/7.4.22/pecl/20190902/xdebug.so"
+
+xdebug.default_enable=1
+xdebug.remote_enable=on
+; 개발PC의 주소 ( 웹서버에서 개발PC에 접근가능해야함 )
+xdebug.remote_host=localhost
+; php-fpm 이 9000 번 포트를 쓰기 때문에 9001 로 조정 
+xdebug.remote_port=9001 
+xdebug.remote_handler=dbgp
+xdebug.profiler_enable=0
+xdebug.profiler_output_dir="/tmp"
+xdebug.idekey=PHPSTORM
+xdebug.remote_autostart=1
+
+# PHP Storm 에서의 설정
+설정 
+PHP > Debug : Debug Port 를 9001 추가
+PHP > Servers : +(추가) 도메인이랑 실제 디렉토리 경로를 입력하고 추가한다.
+
+
+[ Imagick ]
+$ brew install pkg-config imagemagick
+$ pecl install imagick
+
+
+
+Node, Npm, Yarn 설치 
+brew install node
+brew install npm
+brew install yarn --ignore-dependencies
+npm install pm2 -g
+
+이후에 업그레이드는 
+brew update
+brew upgrade node 
+brew upgrade yarn
+
+
+
+
+
+
+
+composer 설치
+curl -sS https://getcomposer.org/installer | php
+mv composer.phar /usr/local/bin/composer
+chmod 755 /usr/local/bin/composer
+
+
+
+
+phpspreadsheet 설치
+composer require phpoffice/phpspreadsheet
+
+
+
+PhpStorm 설정
+Preferences > PHP > level : 7.4
+Preferences > PHP > Composer : composer.json 경로 변경
+
+laravel 설치
+composer global require laravel/installer
+
+# blog 프로젝트 생성
+composer create-project --prefer-dist laravel/laravel blog
+# 자동으로 된것들
+cp .env.example .env  # 설정 파일생성
+php artisan key:generate # 어플리케이션 키생성
+
+# 디렉토리 권한
+chmod -R 777 storage
+
+# npm 설치 
+npm install
+
+
+
+
+
+
+[ redis ]
+brew install redis
+brew services start redis
+
+brew services stop redis
+brew services restart redis
+
+pecl install redis
+make test
+
+vi /usr/local/etc/php/7.4/php.ini
+extension="/usr/local/Cellar/php@7.4/7.4.22/pecl/20190902/redis.so"
+
+brew services restart php@7.4
+
+
+/usr/local/etc/redis.conf
+
+php 에서 redis 연동
+vi /usr/local/etc/php/7.4/php.ini
+session.save_handler = redis
+session.save_path = "tcp://127.0.0.1"
+
+brew services restart php@7.4
+
+테스트
+➜  ~ redis-cli -h localhost
+localhost:6379> keys *
+1) "PHPREDIS_SESSION:cg3gmer2gdcjjokhqp27pumrhb"
+2) "PHPREDIS_SESSION:akiupg3bh76go7rb4k60l81u3m"
+3) "PHPREDIS_SESSION:qd2aad8sfse9idcg655qqiad6t"
+
+localhost:6379> get PHPREDIS_SESSION:cg3gmer2gdcjjokhqp27pumrhb
+"manager_mydrivers_name|s:0:\"\";manager_id|s:5:\"admin\";manager_logintype|s:5:\"admin\";login_type|s:21:\"PC \xea\xb0\x9c\xeb\xb0\x9c\xec\x82\xac\xea\xb4\x80\xeb\xa6\xac\xec\x9e\x90\";manager_loginname|s:9:\"\xec\x9d\xb4\xec\x9e\xac\xec\x9d\xbc\";manager_loginlevel|i:10;manager_appmbno|i:2831;manager_loginnum|i:1;manage_code|i:101;jbofficeadminno|i:2831;manager_loginphone|s:13:\"010-3626-2114\";login_group|s:6:\"buller\";use_OK|s:2:\"OK\";topviewType|s:7:\"mainnew\";is_topmanager|i:1;last_enter|s:13:\"?cn=2&sb=&Tb=\";validateCheck_orders|s:4:\"done\";validateCheck|s:19:\"2021-08-26 21:37:01\";needTo_Call_check|i:0;tsbgtghg|s:44:\"\xec\x88\x98\xec\xa3\xbc\xed\x95\x9c\xea\xb2\x83\xec\x97\x90 \xeb\x8c\x80\xed\x95\x9c \xec\x88\x98\xec\xa3\xbc\xea\xb0\xaf\xec\x88\x98 \xec\x98\xac\xeb\xa6\xbc  \";thismonth_cnt|i:4;"
+
+
+
+
+
+
+[ Java ]
+brew 를 통한 자바 설치
+
+brew tap adoptopenjdk/openjdk
+brew install --cask adoptopenjdk11
+brew install --cask adoptopenjdk14
+/usr/libexec/java_home -V  ; 자바가 설치된곳 확인
+java --version ; 자바버전
+
+~/.zshrc
+
+# Java Paths
+export JAVA_HOME_11=$(/usr/libexec/java_home -v11)
+export JAVA_HOME_14=$(/usr/libexec/java_home -v14)
+
+# Java 11
+export JAVA_HOME=$JAVA_HOME_11
+
+# Java 14
+# 14버전을 사용하고자 하는 경우 아래 주석(#)을 해제하고 위에 11버전을 주석처리 하면된다.
+# export JAVA_HOME=$JAVA_HOME_14
+
+
+설치된 자바 목록 보기
+/usr/libexec/java_home -V
+
+
+
+
+
+[ Android Studio 설치 ]
+설치후 ~/.zshrc
+
+export ANDROID_HOME=/Users/hong/Library/Android/sdk
+export PATH=$PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
+
+
+JDK 설치
+안드로이드 스튜디오내에서 jdk 를 다운받아서 설치가 가능하다.
+
+SDK 설치
+Appearance & Behavior -> System Settings -> Android SDK
+필요한것들을 체크하고 설치한다.
+- NDK (Side by Side)
+- CMake
+- Google Play services
+- Google USB Driver
+- Google Web Driver
+
+
+AVD manager 에서  에뮫레이터 디바이스 추가 : 갤럭시를 추가해보자.
+https://blog.naver.com/kroa/222270015108
+
+
+
+[ Oracle 설치 ]
+
+Docker 도커 설치
+
+맥에 오라클 설치 : https://stophyun.tistory.com/190
+Docker ; solaris123/ekfkawnl4$
+
+sqlplus  system/oracle
+
+sql developer 를 설치 ( jdk1.8 필요 )
+
+
+
+[ Spring ]
+eclipse : https://www.eclipse.org/downloads/download.php?file=/oomph/epp/2021-06/R/eclipse-inst-jre-mac64.dmg
+
+
+[ python ]
+$ brew install --build-from-source python@3.9

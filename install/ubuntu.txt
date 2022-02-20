@@ -45,6 +45,10 @@
 /* mysql configure */
 # mysql_secure_installation
 
+create user 'jbbuller'@'%' identified by '9b7ac62a';
+grant all privileges on jbbuller.* to 'jbbuller'@'%'
+
+
 /* install pm2 */
 # npm install pm2 -g
 

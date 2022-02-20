@@ -164,6 +164,14 @@ chmod -R 777 storage
 npm install
 
 
+[ git ]
+vi ~/.gitconfig
+[alias]
+    s = status -s
+    co = checkout
+    ci = commit
+    br = branch
+
 
 
 

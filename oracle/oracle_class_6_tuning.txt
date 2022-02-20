@@ -1,0 +1,571 @@
+튜닝
+
+# 파싱순서 : parse -> bind -> execute -> fetch
+
+# parse
+3s 체크 : syntax 체크, semantic 체크, shared pool 체크
+
+cursor 오픈, PGA 영역 .. 실행계획
+
+closed cursored -> private SQL 영역
+
+하드파스란?
+최적화 + 행소스분석
+
+
+select * from emp e, dept d where e.deptno=d.deptno and e.deptno=10;
+1) 서버프로세스가 두개의 테이블에 접근 가능한가? 안된다.
+2) 안된다면 어떤테이블에 먼저 접근할까? 실행계획에 따라 다르다.
+
+옵티마이저의 종류
+RBO( Rule Based Optimizer ) : 10g 이후에는 x, 힌트를 사용해야함
+CBO( Cost Based Optimizer ) : 통계정보
+
+실행계획 만드는단계
+문장변형 : 내부규칙에 따라서
+통계 적용
+
+빨간줄 처럼 하나하나 단위가 행소스(row source) 이고 전체적인 목록이 실행계획이다.
+행소스는 다음과 같이 비유할수있다.
+강남역에서 구리역으로 가는데 네비게이션 세부 경로에 해당되는걸로 비유할수있다.
+강남역 -> 올림픽대로 -> 하남 -> 구리
+
+읽는순서 : 안쪽에서 바깥쪽으로 , 위에서 아래로
+
+
+private SQL 영역 할당 -> CURSOR 
+
+공유 SQL 영역도 물론 사용하지만 
+session cached cursor 공간이 있는데 이건 PGA 영역만 사용한다 , 공유메모리까지도 가지 않기도한다.
+
+옵티마이저의 정체는 무엇인가?
+function 이다.
+
+인덱스는  Key값 + Rowid 로 구성된다.
+인덱스만 import 시킬수 없는 이유는 이 Rowid 때문이지
+
+쿼리변형의 여러가지 형태
+where 의 OR 연산은 Union All 로 두개의 쿼리를 합치는걸로  변경할수있다.
+
+옵티마이저의 동작제어
+파라미터 : 플랜을 결정하는데 영향을 주는 파라미터
+
+CURSOR_SHARING : EXACT(기본값), FORCE
+이전에 사용했던것과 동일한 쿼리의 정보를 재활용할수있게 해준다.
+쿼리문을 Hash 형태로 저장하여 비교하므로
+근데 아래의 쿼리들은 Exact 모드(cursor sharing mode)일때 전부 하드파싱이 일어난다.
+왜냐면 값이 틀리니 해시값이 틀리니까
+select * from emp where id=100;
+select * from emp where id=200;
+select * from emp where id=300;
+근데 cursor sharing mode 가 FORCE 일경우에는 상수값을 변수로 바꾸면
+해시값이 동일해지니깐 소프트파싱이 일어나게된다.
+
+select * from EMP where id=100;
+Select * From emp where id=100; 
+이둘은 커서쉐어링이 될까?  안된다. 
+따라서 정확히 동일해야된다.
+sql 코딩 규약을 따라서 작성하는게 좋다.
+
+
+PGA_AGGREGATE_TARGET
+PGA 는 SQL 에 영향을 준다.
+SQL Work Area 안에는 Sorting 을 위한 공간존재, Join 위한 공간 존재
+공간이 부족하면 temporary tablespace 를 활용하게된다.
+PGA_AGGREGATE_TARGET 가 부족하다면 temp I/O 가 발생하게 된다.
+
+STAR_TRANSFORMATION_ENABLED
+원본 쿼리문을 변형할때 활용되는 파라미터
+
+
+Result 캐쉬 관련 파라미터
+
+RESULT_CACHE_MODE : MANUAL(기본), FORCE
+RESULT_CACHE_MAX_SIZE
+RESULT_CACHE_MAX_RESULT
+RESULT_CACHE_REMOTE_EXPIRATION
+
+result cache 는 쿼리문의 결과를 저장하는곳이다.
+라이브러리캐시, 딕셔너리 캐시 의 사이즈를 늘리려면 Shared Pool 을 늘려줘야한다.
+하지만 Result Cache 는 직접적으로 사이즈를 늘릴수있다.
+물론 shared pool 의 크기범위안에서 조절해야한다.
+보통 result cache 는 5%정도 되고 최대 shared pool 의 50%를 넘길수없다.
+
+
+# 실행계획
+실행계획보는것도 권한이 필요하다. 없으면 못본다.
+
+1) explain plan
+예측실행계획 : parse 단계의 예측 실행계획
+만들어진 실행계획이 저장되는곳은 plan_table
+
+플랜보는 방법 ( 예상실행계획 )
+SQL> explain plan for {SQL문}
+
+cd $ORACLE_HOME/rdbms/admin
+utlxplan.sql  이 파일은 plan_table 을 생성해주는 쿼리파일이다.
+
+plan_table 의 단점은 sqlplus 에서 포맷팅을 해야만 보기가 편하다. 
+이걸 개선한것이 dbms_xplan.display 이다.
+
+SQL> explain plan for select sysdate from dual;
+SQL> select * from table (dbms_xplan.display);
+
+쿼리에 아이디를 지정해서 조회하는 방법
+USER01@orcl>explain plan set statement_id='test01' into plan_table for select * from emp where job='CLERK';
+
+USER01@orcl>select * from table(dbms_xplan.display('PLAN_TABLE','test01','typical'));
+
+display 함수의 세번째 인자에는 typical, all, advanced 등이 들어갈수있다.
+
+2) library cache
+최근에 실행된 실행계획을 검사할때 v$sql_plan 을 검색하여 확인
+
+USER01@orcl>select address , hash_value from v$sql_plan 
+ADDRESS  HASH_VALUE
+-------- ----------
+35F4662C 3657695316
+35F4662C 3657695316
+35EA3370  254673041
+.. 
+엄청 많이 나옴
+
+방금전 쿼리에 대한 플랜보기
+USER01@orcl> select * from table(dbms_xplan.display_cursor);
+
+PLAN_TABLE_OUTPUT
+------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL_ID  35s5zz3kaq49b, child number 0
+-------------------------------------
+select address , hash_value from v$sql_plan where rownum<100
+
+Plan hash value: 1007911901
+
+--------------------------------------------------------------------
+| Id  | Operation         | Name      | Rows  | Bytes | Cost (%CPU)|
+--------------------------------------------------------------------
+|   0 | SELECT STATEMENT  |           |       |       |     1 (100)|
+|*  1 |  COUNT STOPKEY    |           |       |       |            |
+|*  2 |   FIXED TABLE FULL| X$KQLFXPL |     1 |    30 |     0   (0)|
+--------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter(ROWNUM<100)
+   2 - filter("INST_ID"=USERENV('INSTANCE'))
+
+
+cursor : sql 실행을 위한 메모리영역
+Fixed Table Full : SGA 의 shared pool 영역에 x$table 영역이 있고 …
+SQL_ID : sql 명령문의 고유 아이디값
+
+
+실행통계를 확인하기
+USER01@orcl>select * from table(dbms_xplan.display_cursor(null,null,'iostats'));
+
+PLAN_TABLE_OUTPUT
+------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL_ID  dt0hqkzcdq5ny, child number 0
+-------------------------------------
+select * from table(dbms_xplan.display_cursor)
+
+Plan hash value: 3713220770
+
+---------------------------------------------------------------------
+| Id  | Operation                         | Name           | E-Rows |
+---------------------------------------------------------------------
+|   0 | SELECT STATEMENT                  |                |        |
+|   1 |  COLLECTION ITERATOR PICKLER FETCH| DISPLAY_CURSOR |   8168 |
+---------------------------------------------------------------------
+
+Note
+-----
+   - Warning: basic plan statistics not available. These are only collected when:
+       * hint 'gather_plan_statistics' is used for the statement or
+       * parameter 'statistics_level' is set to 'ALL', at session or system level
+
+
+경고가 나온다. =>  공간이 없다는 얘기 => 파라미터를 바꿔야 한다.
+
+
+USER01@orcl>show parameter level
+
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+audit_syslog_level                   string
+plsql_optimize_level                 integer     2
+statistics_level                     string      TYPICAL
+
+세션레벨에서 변경
+USER01@orcl>alter session set statistics_level='ALL';
+Session altered.
+
+
+다시 실행해보면 더 자세히 나온다.
+USER01@orcl>select * from table(dbms_xplan.display_cursor(null,null,'iostats'));
+
+PLAN_TABLE_OUTPUT
+------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL_ID  557p4j1ggw222, child number 1
+-------------------------------------
+select * from emp where deptno=10
+
+Plan hash value: 1672835495
+
+-------------------------------------------------------------------------------------------------------
+| Id  | Operation                   | Name          | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+-------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT            |               |      1 |        |      3 |00:00:00.01 |       4 |
+|   1 |  TABLE ACCESS BY INDEX ROWID| EMP           |      1 |      5 |      3 |00:00:00.01 |       4 |
+|*  2 |   INDEX RANGE SCAN          | EMP_DEPTNO_IX |      1 |      5 |      3 |00:00:00.01 |       2 |
+-------------------------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   2 - access("DEPTNO"=10)
+
+
+
+A- 붙은게 실제 통계정보이다.
+
+
+USER01@orcl>select * from table(dbms_xplan.display_cursor(null,null,'iostats last'));
+iostats last 와 iostat 의 차이점은 ?
+last 가 붙으면 가장 마지막껏만 출력하고, 안붙으면 누적된걸 출력한다.
+쿼리를 3번날렸으면 3번 날린거에 대한걸 모두 누적시켜서 보여주므로 last 를 넣어줘야 마지막것만 보는거지..
+
+통계정보 원상복귀
+USER01@orcl>alter session set statistics_level='TYPICAL';
+Session altered.
+근데 statics_level 을 session 레벨로 하는게 좋을까, system 레벨로 하는게 좋을까?
+정답은 session 레벨로 하는게 좋다. system 레벨로 하면 성능에 문제가 있다.
+
+
+근데 파라미터를 변경하지 않고도 할수있는 방법이 있다.
+바로 문장 레벨로 하는 방법이 있다.
+아래와 같이 Hint 를 사용하는 방법이다.
+USER01@orcl>select /*+ gather_plan_statistics */ * from dept
+USER01@orcl>select * from table(dbms_xplan.display_cursor(null,null, 'iostats last'));
+USER01@orcl>select * from table(dbms_xplan.display_cursor(null,null, 'memstats last'));
+USER01@orcl>select * from table(dbms_xplan.display_cursor(null,null, 'allstats last +bytes'));
+
+
+
+근데 힌트에 오타가 있다면 어떨까?
+그냥 무시된다.
+
+
+3) SQL Trace
+가장 많이 쓰는 방법이다.
+UserProcess <-> ServerProcess 가 수행한 모든 작업내용 확인
+OS Level 에서의 trace file
+
+TKPROF : 유틸리티
+포맷팅, 디비서버가 설치된 OS상에 접근권한이 있어야함
+
+sql_trace 파라미터
+USER01@orcl>show parameter sql_trace
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+sql_trace                            boolean     FALSE
+
+USER01@orcl>alter session set sql_trace=true;
+Session altered.
+
+이러면 trace 가 시작된것이다.
+
+USER01@orcl>create table t1( col1 number, col2 number);
+Table created.
+
+
+USER01@orcl>alter session set sql_trace=false;
+Session altered.
+
+trace 를 종료했다.
+
+
+파일의 위치
+USER01@orcl>select value from v$diag_info where name='Default Trace File';
+VALUE
+-----------------------------------------------------------------
+/u01/app/oracle/diag/rdbms/orcl/orcl/trace/orcl_ora_20828.trc
+
+살펴보면 create table 로 인해 생겨난 로그들이 엄청나게 많이 있음 1000 줄은 넘을듯
+이걸 포맷팅된걸로 봐보자.
+USER01@orcl>host tkprof /u01/app/oracle/diag/rdbms/orcl/orcl/trace/orcl_ora_20828.trc hong.txt
+
+hong.txt 를 열어보면 포맷팅된 상태로 볼수있다.
+
+
+
+4) Auto Trace
+
+실제 튜닝에서 사용하지 않음
+
+
+
+
+# Using Index
+
+
+
+USER01@orcl>select /*+ gather_plan_statistics */  employee_id,last_name,commission_pct, rowid from employees where commission_pct=0.4;
+
+USER01@orcl>@xplan
+
+PLAN_TABLE_OUTPUT
+-------------------------------------------------------------------------------------SQL_ID  bh2xar0v1dqp8, child number 0
+-------------------------------------
+select /*+ gather_plan_statistics */
+employee_id,last_name,commission_pct, rowid from employees where
+commission_pct=0.4
+
+Plan hash value: 1445457117
+
+-----------------------------------------------------------------------------------------
+| Id  | Operation         | Name      | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+-----------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT  |           |      1 |        |      1 |00:00:00.01 |       5 |
+|*  1 |  TABLE ACCESS FULL| EMPLOYEES |      1 |      5 |      1 |00:00:00.01 |       5 |
+-----------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter("COMMISSION_PCT"=.4)
+
+
+function based index
+select * from emp where comm is null;
+이 쿼리는 full 테이블 스캔을 한다.
+B*tree Index 는 null 을 저장하지 않는다.
+
+function based index 를 만들고
+USER01@orcl>create index emp_comm_null_idx on emp(NVL(comm,0));
+
+인덱스에 맞게 함수를 호출해서 where 절을 만들면 인덱스를 타게 된다.
+USER01@orcl>select * from emp where NVL(comm,0) =0;
+
+사실 FBI 는 임시방편이라고 봐야겠다.
+
+null 필드는 조건절에 사용하게 되면 곤란한점이 많으니 조건절에 사용하고싶다면 NOT null 로 해줘라.
+
+
+테이블 full scan  vs  인덱스 스캔
+
+Operation 0 (Select Statement) 은 제목이라고 보면된다.
+E-rows : Estimated rows 예측통계
+A-rows : Actual rows 실제통계
+예측과 실제는 다르다 (물론 같을수도있지만)
+
+Hash Group by  : 정렬이 되지 않는다.
+Sort Group by : 정렬이 된다.
+
+인덱스를 타게끔 하려면 쿼리문을 변경시켜줘야한다.
+full table scan 이 인덱스를 탈때보다 유리할때도 있다.
+
+
+is null 
+조회시 index scan => null 은 인덱스에 저장되지 않으므로 not null 로 바꿔주던지 fbi 로 하던지
+
+is not null 
+이렇게 하면 table full scan
+USER01@orcl> select * from employees where salary is not null
+
+강제로 인덱스를 사용하게 하면 인덱스 풀 스캔(INDEX FULL SCAN)을 하게 된다.
+USER01@orcl> select /*+index(employees(salary)) */ * from employees where salary is not null
+
+INDEX FULL SCAN 은 TABLE_FULL_SCAN 보다 효율이 더 나쁠수있다.
+INDEX FULL SCAN 은 작업의 범위가 작을때만 활용하도록 한다.
+
+
+USER01@orcl> select * from customers where cust_last_name like '%itt';
+테이블 full scan 이 일어난다. 전체가 55,000 건인데 비효율적인거 같다.
+
+인덱스를 써보자.
+USER01@orcl> select /*+index(customers(cust_last_name)) */ cust_last_name from customers where cust_last_name like '%itt';
+
+INDEX FULL SCAN 이 일어난다. INDEX FULL SCAN 은 별로 좋지 못하잖아.
+INDEX_RANGE_SCAN 할수있는 방법이 없을까?
+
+fbi 를 활용해보자. ( 하지만 임시방편이다 )
+USER01@orcl> create index custs_fix on customers ( reverse(cust_last_name) );
+USER01@orcl> select * from customers where reverse(cust_last_name) like 'tti%';
+
+
+
+
+# Optimizer
+
+Full Table Scan
+서버프로세스 입장에서 Table Full Scan 시에 기준이 되는것은 무엇이냐?
+HWM ( High Water Mark ) 이다.
+HWM 의 위치는 어디에 기술되어있나? HB(Header Block) 에 기술되어있다.
+HB 를 데이터버퍼캐시에 올려다 놓고 HWM 을 알아낸다.
+
+DB_FILE_MULTIBLOCK_READ_COUNT 
+이값이 설정된 만큼 파일을 읽어오는데 블록이 흩어져있으면 여러군데서 모아서  이값만큼 읽어온다.
+db file scattered read
+physical read 가 많이 늘어났다면 늘어났다는건 I/O 가 증가한거
+DB_FILE_MULTIBLOCK_READ_COUNT 이값이 증가하면 한번에 많은 블록을 읽어서 좋긴 하겠지만
+대신에 SGA 에 기존의데이터가 aging out 되는 현상도 발생하게 된다.
+
+full tagble scan 해서 하고자하는것은 버퍼캐시에 올려놓은후 검색을 해야한다.
+
+실행계획의  Predicate Information 항목에서
+access : 디비 버퍼캐시까지 올려다 놓는걸 말한다.
+filter : 조건에 부합하는 행을 찾아내는 작업
+
+많은 양의 데이터를 처리하는 경우 Index Range 스캔보다 빠름
+작은 테이블은 full scan 이 더 효율적이다. ( 한번에 다 읽어버릴수있다면 인덱스가 필요없지 )
+
+RowID Scan
+Rowid 는 언제 결정되나?
+데이터가 INSERT 될때 결정된다.
+rowid 의 구성요소
+1) 데이터 오브젝트 번호(6자리)
+ - 데이터베이스 세그먼트를 식별하기 위해 사용되는 데이터 오브젝트 번호(어떤 파일(.dbf)인지)
+
+2) 데이터 파일 번호(3자리)
+ - 레코드가 속한 데이터 파일 번호(테이블 스페이스 내에서의 상대적인 파일 번호-어떤 테이블인지)
+
+3) 블록 번호(6자리)
+ - 해당 레코드가 저장된 데이터 블록 번호이며, 데이터 파일(테이블) 내에서의 상대적인 번호
+
+4) 레코드 번호(3자리)
+ - 블록 내에서 각 레코드에 붙여진 일련번호로 0부터 시작되는 번호(어떤 레코드인지)
+
+
+
+샘플 테이블 스캔
+
+select * from emp sample block(10) seed (1)
+샘플링 10%를 우선 뽑는다.
+
+
+
+HR@orcl> select employee_id, rowid,
+dbms_rowid.rowid_object(rowid) as object_id,
+dbms_rowid.rowid_relative_fno(rowid) as file_no,
+dbms_rowid.rowid_block_number(rowid) as block_no,
+dbms_rowid.rowid_row_number(rowid) as row_no
+from employees
+where employee_id = 100;
+
+EMPLOYEE_ID ROWID               OBJECT_ID    FILE_NO   BLOCK_NO     ROW_NO
+----------- ------------------ ---------- ---------- ---------- ----------
+        100 AAAR5VAAFAAAADPAAA      73301          5        207          0
+
+HR@orcl> set autot traceonly exp
+HR@orcl> select * from emp where rowid='AAAR5VAAFAAAADPAAA';
+Elapsed: 00:00:00.00
+
+오토트레이스 설정하니까 자동으로 트레이스가 나오네...
+
+Execution Plan
+----------------------------------------------------------
+Plan hash value: 1116584662
+
+-----------------------------------------------------------------------------------
+| Id  | Operation                  | Name | Rows  | Bytes | Cost (%CPU)| Time     |
+-----------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT           |      |     1 |    99 |     1   (0)| 00:00:01 |
+|   1 |  TABLE ACCESS BY USER ROWID| EMP  |     1 |    99 |     1   (0)| 00:00:01 |
+-----------------------------------------------------------------------------------
+
+
+# Index
+B*Tree (Balanced Tree) 란?
+트리구조가 커지더라도 트리의 level 이 균형되게 유지하는방법 
+
+create index 인덱스명 on 테이블명(컬럼..);
+상황 : test 테이블 100만건 table, id 값을 인덱스컬럼으로 사용
+
+RowID + key  로 저장되는데 저장되는 공간은 segment 이지..
+tablespace 의 extend 를 할당받는다.
+
+테이블은 순서 없이 마구잡이로 들어가지만 인덱스는 순서대로 정렬되어서 들어간다.
+Root, Branches, Leaf 
+
+select * from test where id=3;
+
+인덱스 스캔의 알고리즘
+1) Root 블록을 Data Buffer Cache 로 올린다.
+2) 해당키값과 관련된 branch 블록에 대한 location 정보를 찾는다.
+3) 해당 branch 블록을 Data Buffer Cache 에 올린다.
+4) 해당키값과 관련된 leaf 블록에 대한 location 정보를 찾는다.
+5) 해당 leaf 블록을 또 Data Buffer Cache 에 올린다.
+6) 해당 키값에대한 rowid 를 찾는다.
+7) 이 rowid 값을 가지고 테이블로 간다.
+
+위의걸 보면 I/O 가 은근 많은걸 볼수있다.
+100만건 중에 3건정도면 인덱스를 타는게 유리하겠지만
+100만건 중에 80만건을 찾는거라면 그냥 테이블 풀 스캔하는게 훨씬 낫다.
+(참고로, 인덱스 풀스캔의 경우는 알고리즘이 위와 같지 않다.  Root 부터 찾아가지 않는다 )
+
+
+인덱스 스캔의 유형
+
+1) 인덱스 unique scan
+select * from emp where empno=9999;
+인덱스를 통해찾아낸 rowid 를 통해서 테이블에 액세스한다.
+Unique Index, Primary Key 에 해당하는 사항이다.
+
+2) 인덱스 range scan  ( 옵티마이저가 가장 좋아하는 방식 )
+create index i_deptno on emp(deptno);
+select /*+index(emp i_deptno) */ * from emp where deptno between 100 and 200;
+범위가 작아야 성능이 좋다.
+I/O 가 가급적 많이 일어나지 않게 하면좋다.
+
+
+3) 인덱스 Full 스캔
+select * from emp order by empno;
+조건절이 없으니 테이블 full 스캔인가?
+근데 order by empno 즉 PK 정렬이네 그렇다면 인덱스 full 스캔 방법이 있다.
+
+다른 인덱스 스캔은 Root 에서 출발해서 찾지만 이건 그렇지 않다.
+가장 하위 레벨에서 쭉 찾는다. 따라서 Root 부터 찾아나가는 일반적인 인덱스 조회방법보다는 I/O 가 적다.
+
+그렇다면 인덱스 풀스캔의 조건은 뭘까?
+where 절이 일단 없고, order by 절에 (NOT NULL INDEX ) 컬럼이 있을경우 가능하다.
+만약 컬럼이 NULL 허용일 경우에는 인덱스에는 null 값이 저장되지 않기 때문에 안된다.
+
+order by 절에 (NULL INDEX) 컬럼이 있는대신 where 절에 그 컬럼조건이 is not null 이라면
+select * from emp where salary >1000 and department_id is not null order by department_id;
+이역시도 INDEX FULL SCAN 이 될수있다.
+
+4) 인덱스 Fast Full 스캔
+
+ 반면에 Index Fast Full Scan은 물리적으로 디스크에 저장된 순서대로 인덱스 리프 블록들을 읽습니다. Multiblock I/O 방식을 사용하므로 디스크로부터 대량의 인덱스 블록 읽을 때 큰 효과를 발휘합니다.
+Index Fast Full Scan 방식은 속도는 빠르지만 인덱스 리프 노드가 갖는 연결 리스트 구조를 무시하고 읽기 때문에 결과 집합이 인덱스 키 순서대로 정렬 되어 있지 않습니다. 그리고 쿼리에 사용한 컬럼이 모두 인덱스에 포함되어 있을 경우에만 사용 가능합니다
+
+순서랑 상관없으니 카운트 연산같은거에 사용되면 좋겠다.  select count(*) from …
+
+select /*+ INDEX_FFS(EMP I_DEPTNO) */ deptno from emp where deptno is not null;
+테이블을 볼필요 없이 인덱스만 보면 되지..
+
+Index Full Scan
+Index Fast Full Scan
+싱글 블록 I/O
+multi block I/O
+정렬보장
+정렬보장 X
+속도느릴수있다.
+속도 빠름
+db_file_sequential_read  (wait) 이벤트 발생
+db_file_scattered_read (wait) 이벤트 발생
+
+5) 인덱스 Skip 스캔
+
+그냥 이런게 있다정도로만 알아두자.
+select * from employees where age between 20 and 29;
+
+
+
+
+
+
+
+

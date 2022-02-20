@@ -1,0 +1,1043 @@
+# 공부방법
+카페가입 : https://cafe.naver.com/sqltune
+강사님(조시형) 메일주소 :  oraking@gmail.com
+
+SQL 은 매우 어렵지만 투자할 가치가 있는 언어
+
+안좋은 공부법 : 
+기출문제 풀이식, 글로공부하는 튜닝 ( 실제 튜닝한번하는게 낫다. )
+
+무엇을 공부할것인가?
+DA -> 모델링
+DBA-> 데이터베이스 
+튜닝팀 -> SQL 을 많이 공부하라.
+
+튜닝엔 왕도가 없다.
+-복잡한 현실업무개발
+-실행계획분석
+-모델의 이해, 집합적 사고
+
+아키텍쳐를 알고 개발하는것이 모르는것보다 훨씬 낫겠지
+3대캐시
+데이터 캐시 ( data cache )
+코드 캐시 ( shared pool )
+로그캐시 ( redo log buffer )
+
+오라클성능고도화 책1권의 6장 (I/O 효율화 원리)  을 2권에 자세히 설명함
+1권의 4,5,6장이 성능튜닝 부분이다. 
+2권부터 보는것도 괜찮다. 하지만 어려우면 친절한 책먼저 본다음에 2권보는것도 괜찮다.
+
+책으로만 공부하면 안되는 이유는 실습을 안해봐서 그런것이다.
+익숙하게 실습해보아라.
+
+미리 공부하고 질문사항이 있으면 수업시간에 질문하라.
+
+
+# 옵티마이저
+
+# SQL 실행순서
+1) from
+2) where
+3) group by
+4) having
+5) select
+6) order by
+하지만 이건 논리적인것일뿐이지 실제로는 아니다.
+예를 들면 조인시  두 테이블이 1억건, 2천건이라고 하면 from 절에서 cartesian product 를 한후에 처리할까? 1억x2천만 =...   결론적으로 아니다.
+
+
+# 옵티마이저 = 네비게이션
+내비게이션 모의주행 = 실행계획
+선택의 기준 => 비용 (Cost)
+옵티마이저 분류 : 비용기반 CBO, 규칙기반 RBO (통계정보를 활용하지 않는다)
+
+( 실습스크립트는 카페에 올려준다고함 )
+
+# Hint 
+/*+  */   또는 --+ 도 있지만 후자는 되도록 쓰지말것
+힌트의 종류(몇백개, 자주쓰는건 20개정도) 는 많고 이해하려면 인덱스원리에 대해서 알아야한다.
+select * from v$sql_hint;
+힌트는 “명령어” 다 라고 하면 이해하면 좋을거 같다.
+
+# 파싱과정
+Parse -> Optimization -> Row-source generation -> Execution
+라이브러리캐시 안에 SQL 코드가 캐시된다. 
+하드파싱(Optimization 은 무거운 작업이다) , 소프트 파싱
+
+왜 row-source 라고 부르는가?
+
+5개의 테이블 조인하려면?
+조인순서만 5!=5*4*3*2*1 가지 경우가 생김
+조인방식 : NL, Sort, Hash
+액세스방식 : 테이블스캔, 인덱스스캔
+…
+
+ordered Hint 는 from 절에 기술한 순서대로 조인하는것 -> 실습해보기
+데이터가 없다면 순수하게 파싱타임만 있을것이다. -> trace 를 보면 파악가능(parse, execute, fetch)
+trace 를 보면 하드파싱을 몇번했는지 소프트파싱이 몇번인지 파악이 가능하다.
+CPU 를 많이 소비하는작업은?  하드파싱, Sort 등이 있다.
+
+# 커서(CURSOR)
+1) 공유커서 : SGA 안에 라이브러리캐시에 있는 커서
+2) 세션커서 : 유저프로세서의 PGA 의 커서
+3) 어플리케이션 커서 : 클라이언트 환경에서 세션커서를 가리키는 핸들
+3가지 커서는 서로 연결되는데 그때 커서가 오픈되었다고 표현한다.
+커서를 공유한다는것은 “공유커서” 를 가리킨다.
+age-out 이 되면 다시 공유커서를 만들어야 한다.
+
+이름 없는 라이브러리 캐시 오브젝트( LCO .  Library Cache Object )
+SQL, Anonymous PL/SQL : 전체 SQL 텍스트 자체가 이름
+옵티마이저 입장에서는 SQL 문장이 완벽히 같지 않으면 다른 SQL 로 인식한다.
+
+Literal 로 처리하면 라이브러리캐시 부하유발 -> 바인드 변수 쓰라.
+select * from customer where login_id=’oraking’ ; 
+
+Literal SQL 추출 쿼리가 있음
+force_matching_signature 가 같은놈을 기준으로 뽑는 방식
+select *
+from (
+  select parsing_schema_name, sql_id, sql_text, executions
+       , sum(executions) over (partition by force_matching_signature ) executions_sum
+       , row_number() over (partition by force_matching_signature order by sql_id desc) rnum
+       , count(*) over (partition by force_matching_signature ) cnt
+       , force_matching_signature
+  from   gv$sqlarea s
+  where  force_matching_signature != 0
+)
+where  cnt > 5
+--and    rnum = 1
+order by cnt desc, sql_text
+
+참고로 이쿼리는 실서버에서 돌리면 부하를 많이 줄수있다. 테스트서버에서 돌리는게 좋다.
+하지만 심각한 부하를 주는것은 아니다.
+
+자바 스프링프레임웍을 쓰면 자연스럽게 바인드 변수를 사용하게된다.
+오히려 상수(literal) 를 사용하는 방법을 모르는 경우가 있다.
+
+실습예제에서 리터럴 쿼리가 바인드쿼리에 비해 10배정도 시간이 오래걸렸다.
+또한 라이브러리캐시에 있던 애들이 age-out 되버리기때문에 심각한문제이다.
+누가 만약 리터럴쿼리로 배치를 만들어서 주기적으로 돌린다면 전체적인 성능에 영향을 줄수있다.
+
+cursor_sharing 
+exact : 무조건 공유
+force : 변수값을 임의로 상수로 바꿔주는방식 ( force_matching_signature )
+그렇다면 cursor_sharing 을 force 로 하면 되지 않겠냐? 하지만 부작용이 있어서 안하는게 좋다.
+하지만 어쩔수 없다면 특정세션에 대해서만 cursor_sharing 을 적용하는것도 해법이 될수있다.
+
+바인드변수의 부작용 ; 
+좋은 실행계획 만드는데 방해를 줄수가있다 
+바인드값이 어떤게 들어올지 모르니 통계를 활용할수 없다.
+이럴땐 상수를 쓰는게 좋을수있다.
+
+## 데이터 분포에 따른 실행계획 분리
+예) 아파트 매물 서울,경기가 매물이 많겠지.  서울,경기면 full scan 이 좋고 나머지지역(강원도, 제주도)은 인덱스 스캔이 좋다.
+select * from 아파트매물 where 도시 = :city;
+옵티마이저라면 풀스캔을 타게할까, 인덱스스캔을 할까? 평균분포를 활용한다. 어느지역을 더 많이 검색할지는 무시한다. 
+이문제는 어려운 문제이고 어댑티브커서쉐어링, 바인드키핑 은 옵티마이저팀에서 개발은 되어있으나 사용하지 않는 기능이다.
+해결방법은 개발자가 분기를 타게 해주는것이다. => 데이터 분포에 따른 실행계획 분리
+
+예) 사람들은 배송전일때 많이 조회를 한다.
+거래기간이 3일이내면 인덱스를 타게하고 , 4일이상이면 풀스캔을 하게한다.
+
+## 바인드 변수보다 상수를 쓰는게 좋은것
+라이브러리캐시 부하 가능성이 낮다면 바인드 변수를 안쓰는게 좋다. 예) 성별(남/여)
+DW, OLAP 에서는 바인드가 별로 중요하지 않다. (건수가 많지 않으니 파싱타임은 무시할만하다)
+OLTP 는 기본적으로 바인드 변수를 써야한다.
+OLTP 라도 사용빈도가 낮다면 상수로 써도 괜찮다.
+
+DW,OLAP -> 정보계, 분석계 ( 소수의 사용자가 사용한다, 오래걸리는 쿼리가 많다 )
+OLTP  -> 실시간 사용자를 위한것
+
+
+# I/O
+row
+block 은 I/O 단위 ( 보통 8 KB ), 클수록 OLAP 에 유리
+extent 는 공간의 확장하는 단위
+segment
+data file
+tablespace
+
+데이터베이스가 느린이유는 디스크 I/O 이다.
+
+I/O 속도
+싱글블록 : 초당 100 블록, SAN 은 초당 125~250 블록 
+경합이 심할수록 대기시간 증가한다.
+앞으로 내가 짠 쿼리의 수행한 블록을 세어보아라. ( 감각을 키워라 )
+
+
+프로세스는 잠을 잘때마다 기록을 남긴다. -> 대기 이벤트시 로그
+OWI ( Oracle Wait Interface ) -> Response Time Analysis -> SQLP 에 새롭게 추가된 항목 ( 진단도구 : AWR )
+
+블록은 고유한 주소를 가지고있다. -> DBA
+DBA ( Data Block Adress, 몇번 파일의 몇번 블록 ) : 엑셀로 비유하자면 Sheet 하나가 블록이다.
+RowID = DBA + 블록내의 위치
+
+실행계획의 Cost=I/O
+Cost=26 이 무엇을 의미하는가? I/O Call 횟수 ( Full Scan 시에는 멀티블록I/O ), Call 은 잠자는것이다.
+멀티블록을 하는 이유는 I/O Call 횟수를 줄이기 위해서이다.
+결국 Cost 는 잠자는 횟수이다.
+비용을 계산하는 방식이 2가지이다.
+I/O Costing 모델이 있고 CPU Costing 모델이 있다. 하지만 둘다 I/O 가 대부분을 좌우한다.
+참고로 Card 는 레코드수
+옵티마이저는 버퍼캐시가 없다고 가정하고 계산하는것이다.
+
+SQL> show parameter optimizer_index_caching
+SQL> show parameter optimizer_index_cost_adj
+
+
+BCHR ( Buffer Cache Hit Ratio )
+Hit 율 구하는 공식 ( 시험에 잘 나온다 )
+Trace 에 보면 Disk, Query, Current 등이 나온다. 설명하면 아래와 같다.
+Disk  ( 디스크 아이오)
+Query ( 메모리 아이오 )
+논리적으로 Disk > Query  인데 가끔씩 반대인경우가 있다. 어떤경우냐면 Sort
+
+Q : 튜닝할때 버퍼캐시를 매번 비우고 하면 되는가?
+그렇게 하면 안되고 할수도 없다.
+성능은 물리적인 I/O 이다. 물리적인 I/O 는 통제불가능하다.
+논리적 I/O 를 줄여주는게 SQL 튜닝이다.
+
+# 버퍼캐시 메커니즘
+
+Hash 구조
+데이터를 버퍼캐시에서 어떻게 찾을까?
+DBA 를 해싱하고 버퍼헤더를 체인으로 관리하며 해당 버퍼블록을 찾아간다.
+DBA( 몇번 데이터파일의 몇번 블록이냐 )
+해싱은 function 이다  f(x)
+
+캐시버퍼 체인 래치는 여러 체인을 관리한다. 래치(latch) 는 결국 Lock 이다.
+일반적으로 래치는 32개의 체인을 관리한다.
+
+데이터버퍼캐시에 대한 Lock 은 2가지가 있다. 
+캐시버퍼체인 에 대한 Lock 
+버퍼 블록에 대한 Lock 
+ 
+올리브영에서 메모리 경합이 많이 일어났다. 어떻게 해결했을까?
+읽는 블록수를 줄였다. 10만개를 100개로 줄였다. 그러면 경합이 줄어든다.
+파라미터를 바꿔서 해결될게 아니다. 논리적으로 SQL 을 튜닝하면된다.
+
+SQL 튜닝은 랜덤 I/O 와의 전쟁이다.
+
+하드웨어 증설
+디스크 I/O : SSD 로 교체한다고 빨라질까? 좋아지긴 하지만 I/O call 횟수가 줄어들지 않으면 크게 효과 없다.
+
+SQL 튜닝 
+
+하드웨어 증설 하는게 좋을까 SQL 튜닝하는게 좋을까? 장단점이 있겠지..
+
+실습
+일반적인 게시판 페이징 쿼리 , 3페이지 10개를 출력하는것
+쿼리1 : 테이블 전체를 풀로 정렬
+쿼리2 : rownum <=30
+쿼리3 : NO 21~30
+
+실습
+select decode( count(*) , 0 , ‘N’, ‘Y’) 
+from 
+where ..
+작성자는 카운트에 관심없고 한건이라도 있는지에 만 관심 있으니 rownum 조건을 추가하면된다.
+
+
+SQL> show parameter optimizer_mode
+ALL_ROWS
+FIRST_ROWS
+
+인덱스, 통계정보가 옵티마이저의 중요한 팩터이다.
+잡 스케줄러를 통해 통계정보를 주기적으로 업데이트하면 좋다.
+오라클은 기본적으로 잡스케쥴에 밤 10시에 등록되어있다.
+dbms_stats.gather_table_stats
+통계정보와 배치가 같이 돌아간다면 복잡한 문제가 생기겠지.. 정교하게 관리해야한다.
+예를 들어 통계돌린후에 배치로 천만건을 밀어넣었다면 통계는 0 건이라 풀 스캔을 하도록 옵티마이저가 판단하지만 실제로는 천만건이 들어있으니 부하가 생기겠지.. 그러면 장애가 발생할것이다.
+
+select * from all_tables order by last_analyzed desc nulls last
+통계 정보가 언제 수집되고있는지 판단하는 방법이다.
+# 실행계획 분석툴
+Auto Trace 는 실제결과 + 예상실행계획 + 실제 실행통계
+SQL Trace 는 실제 실행계획, 가장 강력한 도구
+
+결국 SQL 분석은 Trace 분석이다. => MRI 찍는거다라고 보면된다.
+패턴만 외워서 튜닝할순 없다. 근본적으로 Trace 를 분석할줄 알아야된다.
+
+Auto Trace 와 Trace 는 매칭되는 데이터가 있다. 보여주는 형식만 다를 뿐
+
+Trace 에서
+## cpu 와 elapsed 의 차이점?
+elapsed time : 순수히 DB 에 call 이 들어와서 처리될때까지 걸린 시간
+cpu time : lock, latch, I/O 등으로 인해 sleep 한 시간을 제외한 순수한 cpu 가 일한 시간
+만약 cpu < elapsed 의 차이가 크다면 I/O 가 많다는것이다.
+근데 I/O 가 없는데 차이가 많다면 대기이벤트(lock, latch) 를 잡아내야한다
+trace 의 레벨을 높여서 대기이벤트 까지 로그를 잡아내야한다.
+
+실제 유저가 느끼는 시간은
+WAS 시간 + 네트워크 시간 + elapsed time 
+## query 와  current 의 차이점은 뭔가?
+이거 설명하려면 너무 복잡하니 책을 읽어라.
+=> 오라클 성능고도화 1권을 읽어라.
+읽고 있는 와중에 데이터가 변할때 어떻게 처리할것인가에 대한 이슈이다.
+Oracle 과 SQL Server 와는 다르게( Current 모드 ) 동작한다. Oracle 은 바뀌기전의 데이터를 읽도록( Consistence 모드 ) 기본적으로 되어있다. UNDO 가 있기 때문에 가능한것이다. 다른 DBMS 도 결국에는 이 모드로 가고있다.
+이걸 MVCC 라고 한다 
+
+성능고도화 책보면 일관성이 깨지는 경우가 있다.
+
+## Trace 의 레벨을 올릴수있다.
+alter session set event.. 
+
+
+실습하는 방법
+같은 쿼리를 가지고 여러가지 여러가지 방법으로 해보아라.
+그리고 명령어를 눈감고도 쓸줄 알아야 한다. 연습을 많이 해보자.
+
+select /*+gather_plan_statistics */ * from scott.emp;
+select * from table(dbms_xplan.display_cursor(null,null,'allstats last'))
+
+A-Rows, A-Time, Buffers, Reads 를 분석할것이다.
+같은 쿼리를 맨처음 실행하면 Reads 가 나올것이고 다음사람부터는 Reads 가 안나올것이다.
+
+select /*+gather_plan_statistics  */ * from small_table;
+이건 테이블카운트가 6만건 정도되는데 쿼리툴에서 100건만 읽고 멈췄다.
+이때는 통계치가 집계가 안되서 plan 이 안나온다.
+그러면 SQL_ID 를 찾아야 한다.
+select * from v$sql where sql_text like ‘%...%’
+근데 실디비라면 당연히 이렇게 하는수밖에 없겠지
+
+또한 SQL*Plus 로 테스트해보면 안된다. 되게 하려면 다음과 같이 해줘야한다.
+SQL> set serveroutput off 
+
+다른 툴에서도 테스트를 해봤는데 안된다면 마찬가지로 그 이유를 찾아라.
+
+Q : 힌트나 파라미터를 고치지 않았는데도 display_cursor 가 출력이 된다. 단 아래와 같은 경고와 함께 말이지.. 그럼 아래의 내용은 무얼 의미하는것일까?
+Note
+-----
+   - Warning: basic plan statistics not available. These are only collected when:
+       * hint 'gather_plan_statistics' is used for the statement or
+       * parameter 'statistics_level' is set to 'ALL', at session or system level
+
+
+
+Q. 실행계획을 보기위한 권한은?
+# cursor 를 위한 권한
+SQL> grant select on v_$session to scott;
+SQL> grant select on v_$sql to scott;
+SQL> grant select on v_$sql_plan to scott;
+SQL> grant select on v_$sql_plan_statistics_all to scott;
+
+# auto trace 를 위한 권한
+SQL> @?/sqlplus/admin/plustrce.sql
+SQL> grant plustrace to scott;
+
+
+
+# 2번째 수업전 이것저것 이야기
+
+[ 시스템 실측값 ]
+싱글블록 아이오 vs 멀티블록 아이오에 대한 평균 걸리는 시간 측정방법
+db file sequential read -> 싱글블록  I/O
+db file scattered read -> 멀티블록 I/O
+이건 실측이고 아래는 미리 측정해놓은 통계를 조회하는 방법이다.
+그리고 멀티블록 아이오는 인접 블록까지 같이 읽는데 익스텐션 경계를 벗어나진 못한다.
+
+[ 시스템 통계 ]
+SYS@orcl> select sname, pname, pval1,pval2 from sys.aux_stats$;
+워크로드 통계와 노워크로드통계.. 수집해야한다.
+노워크로드 통계는 시스템을 처음 인스톨시에 시스템 속도를 측정하여 통계치를 만들어놓는다.
+워크로드는 실제 디비가 운영되는 동안 발생한 통계치이다.
+http://www.gurubee.net/lecture/3482
+
+주간용과 야간용 시스템 통계가 틀릴것이다. 주간에는 인덱스 스캔이 많이 야간엔 풀스캔이 많이 일어나지. 그런곳이 거래소 같은곳이지
+# 인덱스
+# sequential 액세스 vs random 액세스
+인덱스도 블록이고 테이블도 블록이다. 자료구조만 다를뿐이다.
+인덱스스캔은 인덱스의 rowid 를 통해 블록(DBA) 을 찾아가는것이고,
+풀스캔할때 블록은 어떻게 읽을까?
+테이블도 데이터가 연속적이진 않다. 데이터들은 흩어져있다.
+그건 바로 익스텐트 맵을 통해서 찾는거다. 교제의 데이터 저장구조를 보면된다. 3-8,9
+select * from dba_extents where segment_name=’MY_SEGMENT’ 
+
+[ 익스텐트 맵 ]
+Q. 멀티블록 I/O 중간에 왜 싱글블록 I/O 가 나타나는가?
+친절한 SQL 169 페이지 참조
+익스텐트 맵은 테이블 블록에 대한 인덱스이다.
+예를 들어 1-10 번 블록까지 읽어야 하는데 1,6,8 번이 이미 버퍼캐시에 있다고 하자.
+멀티브록 아이오 단위 = 4
+1번은 버퍼에 있으니 패스, 
+2,3,4,5 번은 4개 모였으니 멀티블록 아이오로 읽어
+6은 버퍼에서 읽어
+7번은 일단 보류
+8번은 버퍼에 있네 .. 그러므로 7번을 읽어버려 앗 근데 이건 싱글블록이 되네..
+9,10 은 멀티블록 으로 읽어
+그러고보니 멀티 블록으로 읽는다지만 실제로는 4, 1, 2 등 읽는 블록수는 제각각이다.
+
+
+# 인덱스의 구조
+Range Scan 이 중요하다. 왜냐하면 정렬이 되어있기 때문에 거기까지만 찾고 멈출수있기 때문이다.
+B*Tree 인덱스 : 나무를 거꾸로 세워놓은 모양, Root, Branch, Leaf  그리고 B 는 Balanced
+뿌리에서 Leaf 까지의 거리가 동일하다.
+
+인덱스가 만들어지는 과정은 어떨까?
+블록이 꽉 찼는데 새로운 데이터가 insert 되면  새로운 블록으로 복사하고 링크를 새로 구성한다.
+링크는 double linked list 구조이다.
+리프가 늘어나서 루트가 꽉 차면 마찬가지로 루트가 복제가 되고 새로운 루트가 생기게 된다.
+루트와 브랜치는 하위블록에 대한 블록주소를 가지고 있다.
+리프는 rowid 를 가지고있다. 
+
+많은 사람들이 인덱스 구조를 모르고있다.
+
+4-21 문제 풀기 : 인덱스 탐색의 원리를 파악하기쉬운 문제이다.
+수직적 탐색과 수평적 탐색으로 나뉜다.
+수직적 탐색은 스캔 시작점을 찾는것이다. ( 한번 내려오면 끝이다 )
+수평적 탐색은 찾고자 하는 값을 찾을때까지 하고 멈춘다.
+결국 이 개념이 가장 중요한 개념이다.
+
+
+Q. 인덱스를 성별+이름 으로 하는게 좋냐? 이름+성별로 하는게 좋냐?
+where 성별=’여자’ and 이름=’유관순’;
+보통 이름+성별 로 만드는게 좋다라고 알고있고 인터넷에도 이렇게 설명되어있는게 많다.
+이건 액셀의 필터 정도로 생각하고있어서 그렇다.
+하지만 절대 그렇지 않다.  전혀 차이가 없다.
+머릿속에서 “필터” 이미지를 버려라.
+
+그렇다고 쿼리조건이 바뀐다면 순서가 중요해질수있다는것이다.
+like 나 between 등이라면 말이다.
+
+
+
+# 튜닝 실습 4-30
+
+SELECT  종목영문심볼, 거래일시, SUBSTR(거래일시,9,6) 거래시각, 현재환율가격
+  FROM  실시간환율 a
+ WHERE  종목영문심볼 = 'USDKRWCOMP' 
+   AND  해외은행코드 = 'EUAM'
+   AND  SUBSTR(거래일시,1,8) = :trdDd   -- 20190601 입력
+   AND  SUBSTR(거래일시,9,6) >= '090000'
+   AND  SUBSTR(거래일시,9,6) <= '150000'
+
+튜닝시 변수를 상수로 변환하지마라.
+Buffers : 54063 건 나온다. 이걸 튜닝해라.
+
+select /*+gather_plan_statistics */ 종목영문심볼, 거래일시,substr(거래일시,9,6) 거래시각, 현재환율가격
+from 실시간환율
+where 종목영문심볼 = 'USDKRWCOMP'
+and 해외은행코드='EUAM'
+AND 거래일시 BETWEEN :trdDd||'090000' and :trdDd||'150000';
+
+
+
+select * from table(dbms_xplan.display_cursor(null,null, 'allstats last'));
+
+Buffers 를 봐라 : 내가 한건 28 건이다.
+---------------------------------------------------------------------------------------------------                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+| Id  | Operation                    | Name     | Starts | E-Rows | A-Rows |   A-Time   | Buffers |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+---------------------------------------------------------------------------------------------------                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+|   0 | SELECT STATEMENT             |          |      1 |        |    180 |00:00:00.01 |      28 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+|*  1 |  FILTER                      |          |      1 |        |    180 |00:00:00.01 |      28 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+|   2 |   TABLE ACCESS BY INDEX ROWID| 실시간환 |      1 |   1250 |    180 |00:00:00.01 |      28 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+|*  3 |    INDEX RANGE SCAN          | 실시간환 |      1 |   2250 |    180 |00:00:00.01 |      15 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+--------------------------------------------------------------------------------------------------- 
+
+같은 쿼리문이라도 array 사이즈에 따라서 buffer 의 결과가 다르게 나올수있다. 28~40 정도 나온다.
+
+
+
+# select * from table(dbms_xplan.display_cursor(null,null,’allstats last’));
+v$sql 에 쿼리문이 기록이 되려면 커서가 닫혀야 한다.
+그런데 툴에 따라서 모든 결과를 fetch 하지 않고 일부(예를 들어 100건) 만 fetch 한다면 v$sql 에 기록되지 않기 때문에 실행통계를 볼수없다. table(dbms_xplan.display_cursor..)
+
+child_number 는 뭐냐?
+sql_id 는 동일하나 child_number 가 다른케이스는 다양한 이유가 있다.
+예를들어 바인드변수에 들어가는 길이에 따라서도 child_number 가 달라질수있다.
+select * from v$shared_cursor;
+
+# 인덱스 range scan 을 못하는 이유
+인덱스를 탄다는것은 range scan 을 말한다. 인덱스풀스캔, 스킵스캔 등은 탄다고 말하지 않는다.
+range scan 이 안되는 이유는 시작점도 못찾고 종료점도 못찾을때 이다.
+
+1) 중간값 검색 
+
+2) 인덱스 컬럼변경 
+특히 NVL 처리  where NVL(주문수량,0)<>0
+DB 마다 NULL 에 대한 처리가 다르고 개발자들은 NULL 에 대한 공포심이 있다. 
+
+자동 형변환이 일어나는 경우
+where 생년월일 = 19821225 => where to_number(생년월일)=19821225
+문자와 숫자가 만나면 숫자가 이긴다. ( 하지만 like 일땐 문자가 이긴다 )
+where 고객번호 like ‘9410%’ => where to_char(고객번호) like ..
+날짜와 문자가 만나면 날짜가 이긴다.
+where 가입일자=’01-JAN..’ => where 가입일자=to_date(..)
+
+재미난 에피소드
+where 계좌번호 like :accnt_no || ‘%’ and 거래일자 between ..
+계좌번호는 number 형이었다. 그러면 형변환이 일어나겠지..
+
+자동형변환은 성능뿐 아니라 잘못된 결과가 나올수도있다.
+decode(job,’PRESIDENT’,null, sal) 의 결과는 3번째의 값으로 결정되는데 3번째 값이 null 이면 varchar2 로 간주한다. 즉 급여가 varchar2 로 형변환이 일어나는것이다.
+to_number(null) 로 해줘도 되지.
+
+3) 부정형 비교   where 직업<> ‘학생’
+
+하지만 아닌경우도 있다. where sal not between 1000 and 3000
+이 쿼리는 sal <1000 , sal>3000 이런식으로 두개로 나눠서 스캔한다.
+그런후에 concatenation (union all) 해버리는것이다.
+하지만 1000-3000 의 값이 무지 작다면 테이블 풀 스캔하는것이 더 좋을수가 있다.
+통계 정보의 중요성을 알수있다.
+참고로 관련힌트
+use_concat : concatenation 하라는것 (or 를 union all 로 바꿔주는것)
+no_expand : concatenation 하지말라는것
+
+ where sal not between :ssal and :esal
+바인드 변수를 사용한다면… 여기가 옵티마이저의 한계이다.
+
+배송정보 ( 인덱스 = 주문상태코드 + 주문일자 )
+where 주문상태코드<>3 and 주문일자 between ..
+근데 주문상태코드는 3(배송완료) 가 99% 이다.
+where 주문상태코드 in (0,1,2,4,5) and 주문일자 between..
+이렇게 하면 좋다. 근데 이것의 문제는 무엇인가? 나중에 새로운 상태코드가 생긴다면 어플리케이션의 코드를 모두 변경해야하는 문제가 있다. 
+해결방법은 주문 코드 테이블을 만들어서 JOIN 을 하는것이다.
+
+
+4) OR 조건절  where 전화번호=:tel or 지역=:area
+or expansion  , in list iterator
+
+range scan + table full scan 의 or 조합인경우에는 full scan 한번 하면 되므로 range scan 할 필요가 없드므로 range scan 이 발생하지 않는다.
+
+5) NULL 비교  where 연락처 is null /  오라클의 인덱스엔 null 값을 저장안하므로
+결합인덱스일경우에는 모든컬럼이 null 일때만 인덱스에 저장하지 않는다. 하나라도 null 이 아니면 인덱스에 저장한다. -> TODO : 요거 복습할것
+6) NOT NULL : where 연락처 is not null  이건 결과가 너무 많아서 인덱스 안타는게 낫다.
+7) 옵션 조건 처리 ; 상품번호 = NVL(:prod_no, 상품번호)
+8) 인덱스 선두 컬럼이 조건절에 누락 -> 이게 가장 중요한 이유이다.
+만약 선두컬럼이 아닌 두번째 컬럼이 함수로 가공이 되어있다면 range 스캔을 탄다.
+그렇다면 range 스캔이 장땡이냐?  아니다.
+빨갱이 찾기 -> 토드나 오렌지에서 full scan 이 빨간색이 나오니 그렇게 표현한것이다.
+
+Access 조건과 Filter 조건이란?
+Access : 인덱스 스캔범위를 결정하는 조건
+Filter : 스캔범위를 결정하지는 못한다. 단지 테이블 액세스 여부를 판단하는 조건이다.
+
+
+$실습을 하면서 체득해야지 자기확신이 생긴다.
+일하다보면 다른팀을 설득해야할때가 있는데 자기확신이 있어야 가능하다.
+
+
+$주문일자는 어떤 형식으로 저장하나?
+DATE 로 저장해라. 이게 제일좋다. 그렇지 않으면 데이터 무결성 깨진다.
+
+$튜닝은 오라클을 통해서 하면 다른 데이터베이스는 다 할수있다.
+오라클은 항공모함이고 다른디비는 통통배일수있다.
+
+# 인덱스의 효과
+
+Sort 연산을 생략할수있다.  왜냐하면 이미 Sort 되어있기 때문이다.
+Sort 가 되어있으므로 MIN, MAX 값도 금방 찾는다. INDEX RANGE SCAN ( MIN/MAX )
+
+Sort 의 단점?
+Sort 연산자체는 크게 문제가 안된다. 문제는 부분범위처리가 안되기 때문이다.
+select * from  ( 10만건 ) where rownum<30 이라고 한다면 
+부분범위처리시 30건만 처리하는데 => Magic 
+Sort 일땐 10만건 다 읽고 Sort 를 한다. 
+
+실습 : 아래쿼리를 튜닝하라.
+select /*+gather_plan_statistics */ max(to_char(created, 'yyyymmdd hh24miss'))
+from big_table
+where owner = 'SYS';
+
+Buffer : 33389 건,  index : owner+created
+
+select /*+gather_plan_statistics */ to_char(created, 'yyyymmdd hh24miss') from
+(
+	select created
+	from big_table
+	where owner = 'SYS'
+	order by created desc
+)
+where rownum <=1;
+
+이렇게 바꾸니 Buffers : 3
+
+하지만 더 좋은건 아래와 같이
+select /*+gather_plan_statistics */ to_char(max(created), 'yyyymmdd hh24miss') from big_table where owner = 'SYS';
+
+
+
+# 인덱스의 확장기능
+
+$ index range scan 
+수직적 탐색후 수평탐색,  인덱스의 선두컬럼이 조건절에 있어야 한다.
+
+$ index full scan
+수평적 탐색만 한다 (하지만 맨왼쪽 위치는 루트에서부터 찾아가야한다 )
+
+$ index unique scan
+수직적 탐색 , Unique Index ( PK )
+$ index skip scan
+SQL> create index emp_idx on emp ( deptno, sal);
+SQL> select * from emp where sal between 2000 and 4000;
+조건절에 선두컬럼이 없는데 선두컬럼의 NDV 가 적은 경우
+NDV = Number of Distinct Value ( NDV 가 적은 경우 : 성별 )
+이 기법이 나오기전에 사용했던 방법 -> In List Iterator
+where sal between 2000 and 4000 and 성별 in (‘남’,’여’);
+
+$ index Fast full scan
+
+실제적인 인덱스의 물리적인 구조는 순차적으로 되어있지 않다. 링크드리스트를 통해 연결되어있는것이다. 논리적으로만 순차적이다.
+그냥 익스텐트에 있는 인덱스 블록들을 통째로 읽어버린다. ( 멀티블록 I/O )
+그러니깐 빠르게 읽어들일수있다. 하지만 순서가 보장되지 않는다.
+그리고 인덱스에 포함된 컬럼으로만 조회할때 사용가능하다.
+관련 힌트 index_ffs, no_index_ffs
+
+인덱스 a+b+c+d
+select a,b from t where c= and d=   ( 된다. )
+select a,b from t where c= and d=   order by f  ( 안된다. )
+select a,b,g from t where c= and d=   ( 안된다 )
+
+결국 테이블 액세스를 안하는것 때문이다.
+
+$ index range scan descending
+
+역순으로 탐색, Max 값 찾을때 유리하다.
+
+
+[ 실습 ] 다양한 스캔방식 유도
+
+
+고객_X01 고객명, 가입일자
+고객_X02 휴대폰번호
+고객_X03 고객등급, 연령
+
+--1) Index Full Scan으로 유도해 보고, Index Skip Scan으로도 유도해 본다. 
+SELECT 고객번호, 고객명, 가입일자, 고객등급, 연령, 휴대폰번호 
+FROM   고객 C
+WHERE  연령 BETWEEN 20 AND 40
+;
+
+
+-- 2) Index Range Scan Descending 으로 유도해 본다. 
+SELECT 고객번호, 고객명, 가입일자, 고객등급, 연령, 휴대폰번호 
+FROM   고객 C
+WHERE  고객등급 = 'SY'
+ORDER BY 연령 DESC
+;
+
+-- 3) 인덱스를 이용해 MIN/MAX 값 찾기 
+SELECT MIN(연령)
+FROM   고객 C
+WHERE  고객등급 = 'SY'
+;
+
+
+SELECT MAX(연령)
+FROM   고객 C
+WHERE  고객등급 = 'SY'
+;
+
+-- 4) FIRST ROW(MIN/MAX) 방식으로 작동 안 하는 것을 확인하고, 튜닝 SQL을 작성한다. 
+SELECT MIN(연령), MAX(연령)
+FROM   고객 C
+WHERE  고객등급 = 'SY'
+;
+
+
+
+힌트 찾는 쿼리
+select * from v$sql_hint;
+select * from v$sql_hint where name like ‘INDEX%’; 
+
+결과 건수가 100 건이 넘어가기때문에 Ctrl+E 해서 실행하면 QueryBox 에서 실행계획이 나온다.
+
+$ 1번 답
+SELECT /*+index(c 고객_X03) */ 고객번호, 고객명, 가입일자, 고객등급, 연령, 휴대폰번호 
+FROM   고객 C
+WHERE  연령 BETWEEN 20 AND 40
+이렇게 하면 인덱스 스킵스캔이 된다. 풀스캔이 되게 하려면 인덱스 스킵스캔을 안되게 하면된다.
+
+SELECT /*+index(c 고객_X03) no_index_ss(c)*/ 고객번호, 고객명, 가입일자, 고객등급, 연령, 휴대폰번호 
+FROM   고객 C
+WHERE  연령 BETWEEN 20 AND 40
+
+$ 2번 답
+SELECT  /*+index_desc(c 고객_X03) */  고객번호, 고객명, 가입일자, 고객등급, 연령, 휴대폰번호 
+FROM   고객 C
+WHERE  고객등급 = 'SY'
+ORDER BY 연령 DESC
+;
+
+$3,4 번은 아무것도 안해도 된다.
+
+$5번 답
+이게 숙제다.
+
+select 
+(
+SELECT MIN(연령)
+FROM   고객 C
+WHERE  고객등급 = 'SY'
+) "min"
+, 
+(
+SELECT MAX(연령)
+FROM   고객 C
+WHERE  고객등급 = 'SY'
+) "max"
+from dual;
+
+
+튜닝을 잘 하려면 => 이론+실전+센스
+
+
+# 테이블 액세스 최소화
+
+테이블에 접근하는 방법은 두가지뿐이다.
+1) 인덱스를 통한 랜덤액세스
+2) 테이블 풀스캔
+
+인덱스 rowid : 논리적인 주소이다.
+튜닝잘된 DB 의 BCHR 이 99% 이고 MMDB 는 100% 인데 1% 차이뿐인데 왜 성능차이가 날까?
+MainMemoryDB 는 포인터로 액세스한다. 메모리상의 물리적인 주소로 연결되어있다.
+Disk DB 는 rowid 를 통한 랜덤액세스인데 그 성능이 낮다.
+플랜에서 Table Acess By Index ROWID 를 보면 굉장히 무거운 작업이라고 인식을 해야한다.
+
+인덱스에 대한 맹신
+인덱스만 있으면 잘 찾아가는데 왜 파티션을 하냐?
+이건 랜덤액세스의 비용을 몰라서 하는 얘기임 -> 클러스터링 팩터
+
+클러스터링 팩터 CF
+CF 가 높으면 검색효율이 좋다.
+포인터를 유지하면서 버퍼를 찾아가는것을 Buffer Pinning 이라고 한다.
+Buffer Pinnging = Buffer Lock
+이것은 마치 윈도우10 에서 “시작화면에 고정” 과 비슷하다. 아이콘도 핀 이다.
+
+핀을 1개 아닌 여러개를 두면 좋지않냐?
+핀을 여러개 가지는것도 비용이다. 결국에는 핀은 1개만 있다.
+
+실행계획에서는 안나온다. 트레이스에는 나온다. 그걸 읽어낼수있어야 한다.
+
+CF 도 통계정보중에 하나이다.  통계 = 오브젝트통계+시스템통계
+오브젝트 통계는 아래 4개이다.  
+1) 테이블 통계 : select * from dba_tables where table_name=’BIG_TABLE’;
+2) 인덱스 통계 : select * from dba_indexes where table_name=’BIG_TABLE’;
+	BLEVEL : 브랜치의 레벨 , 2라면 리프까지 포함해서 3개의 블록을 읽는다.
+	AVG_LEAF_BLOCKS_PER_KEY : 평균적인 리프블록 읽는수. 작을 수록 좋다.  88
+	AVG_DATA_BLOCKS_PER_KEY : 키당 테이블 랜덤액세스수 1593
+	CLUSTERING_FACTOR : 클러스터링 팩터네 591167
+	테이블 총 레코드수 :1천만
+
+3+87+1593+591167/천만
+TODO : 클러스터링 팩터 효과 실습해보기 4-115~116 페이지 ( 실제로 통계정보로 비교해보기 )
+
+
+3) 컬럼 통계 : select * from dba_tab_columns where table_name ..
+4) 히스토그램 : select * from dba_histograms where  table_name=’BIG_TABLE’ and column_name=’OWNER’;
+
+## CF 계산하기
+이전블록과 블록번호가 달라지면 카운트 증가
+
+오라클은 모든걸 다 오픈시켜놨다. 뷰, 트레이스등.. 도구가 많다는것이다. 다른디비는 답답하다.
+도구를 어떻게 사용하느냐가 중요하다.
+스크립트를 내가 한땀한땀 만들어야한다. 그게 내 자산이 되는것이다.
+예를들어 INDEX 조회하는 스크립트, 테이블스페이스 현황,
+sqlplus 에 accept 란 명령어가 있다. 이걸로 인자를 받을수있다.
+sqlplus 명령어를 공부해야한다.
+조시형 강사님은 250 여개 정도의 스크립트가 있다.
+오라클 교육 받으면서 한것들 전부 스크립트화 하자.
+윈도우 sqlplus 에서 SQLPATH 를 환경변수에 등록해놓으면 나만의 스크립트를 실행할수있다.
+
+
+##인덱스의 손익분기점 
+크러스터링팩터, 멀티블락I/O 두가지에 의해 결정된다.
+일반적으로 5~20%
+클러스터링 팩터에 따라서 다르다. 
+클러스터링 팩터가 좋으면 90%까지도 올라가고, 나쁘면 5% 이하로 내려간다.
+큰테이블은 CF 가 나쁠거고 작은테이블은 CF 가 좋을것이다.
+또다른 요소는 MBRC(멀티블락 리드카운트) 이다.
+MBRC를 올리면 풀스캔 효율이 좋아지므로 손익분기점은 낮아진다.
+
+
+## 인덱스 컬럼추가
+테이블 액세스를 줄이는 효과를 준다.
+다음과 같은 전략이 가능하다. 번호순서대로 추천한다.
+1) 기존의 인덱스에 뒤쪽에 컬럼 추가 -> 그나마 좋은 방법
+2) 새로운 인덱스 추가 -> 새로추가하는건 좋지 않지만 그래도 위험한방법은 아니다.
+3) 기존인덱스에서 컬럼 중간에 끼워넣기 -> 위험한 방법, 다른 쿼리에 영향있다.
+
+
+
+## 트레이스보기
+Disk : DIsk I/O
+Query : 
+cr : 블록수
+Rows : 처리건수
+time ; 이건 안봐도 된다.
+
+커버드 인덱스 => 테이블 액세스없이 인덱스에서 끝내버리는 인덱스
+
+plan 을 자꾸보다 보면 맨아래쪽 블록이 메인쿼리인걸 알수있다.
+
+트레이스에서 cr 이 제일 높은놈 찾아서 공략한다.
+
+
+$ SQLP 공부법? 
+패턴으로 공부하지마라.
+객관식 : 이론
+주관식 : 실전 , 서술형으로 당낙이 가려진다.
+SQP 의 취지는 실무전문가를 인정해주기위한 자격증이다.
+
+TODO : 예습을 해오라 -> 5장 부분범위처리, 소트튜닝
+
+
+# 클러스터링 전략
+
+## IOT 
+MSSQL 은 클러스터드 테이블이라고 부른다.
+create table (… ) organization heap;  -- 일반적인 테이블은 힙 테이블이다.
+create table (... ) organization 
+
+IOT 는 리프블록이 곧 데이터블록이다.
+
+## 클러스터 테이블
+블록단위로 모아서 저장한다.
+
+## 파티셔닝
+세그먼트 단위로 모아서 저장한다. ( 클러스터랑 거의 비슷하다 )
+파티션은 고급과정에서 다룬다.
+
+## 수동으로 CF 높이기
+정렬해서 테이블 재생성-> 장단점이 있다. 특정인덱스기준으로하면 다른 인덱스는 안좋아진다.
+
+
+TODO : IOT 는 자습하라.
+
+
+# 인덱스 스캔의 효율화
+테이블에 가기전에 인덱스 탐색의 효율화
+
+TODO : 책의 실습을 해볼것 4-160 부터
+
+선행컬럼이 = equal 이 아니면 버리는것이 생긴다. => filter 조건
+access 조건 : 스캔범위결정
+filter 조건 : 버릴지 여부
+
+오라클에서 access 조건이라고 하는게 실제로는 아닌경우가 있다.
+where c1 between 10 and 30
+and c2=2
+and c3=3;
+이런경우가 그런것이다. 시작점과 끝점만 c2,c3 컬럼이 역할을 하고 그외에는 필터역할이다.
+
+Buffers 는 블록을 나타내고 row 수를 대충 짐작하면 1000 정도를 곱해주면된다.
+A-Rows 와 Buffers 를 보고 효율성을 체크해봐야한다.
+
+
+
+# 질문 답변
+인덱스 압축이란? 
+인덱스나 테이블을 압축할수있다. alter … compress
+사이즈를 줄여주는것이다. 테이블과 인덱스는 압축방법이 틀리다.
+선두컬럼이 NDV 가 낮은걸두면 압축률이 올라간다. 성별같은거가 앞이면 좋지
+
+null 비교
+where null = null  (X)
+where null is null (O)
+
+cr
+cr=500 이라면 한블록당 100-1000 레코드 니까 50,000 ~500,000 레코드라고 보면된다.
+
+skip scan vs in-list
+성별 남녀는 옵티마이저가 모르니깐 어떤게 좋냐
+in-list 가 좀더 좋지만 크게 좋지는 않다
+
+
+# 부분범위 처리 
+PGA : sort area, hash area 등으로 활용된다.
+
+Sort Aggregate : sum, min, max 함수등이고 실제 소트하진 않아
+
+두개의 집합의 중복이 없다면 union 쓰지말고 union all 써라.
+
+distinct -> exists 로 대체 (공식, 하지만 100%는 아냐)
+Sort Group By
+데이터가 소팅되어있으면 그룹핑도 빨리 할수있다.
+=> 회전초밥 접시로 비유
+group by region   (인덱스의 컬럼으로 그룹바이 한다면 부분범위처리가 가능하고 성능이 좋아진다 )
+
+
+부분범위 처리관련 카페글
+https://cafe.naver.com/dbian/246
+오렌지 툴은 100건씩만 읽는다. 1억건짜리 테이블을 읽는다면 진짜로 1억건 다 읽을까? 아니다. 부분범위처리가 된다.
+강사님이 사용하는 스크립트 ( 직접 구현해보자 )
+session 보는 스크립트 list
+session 이 어떤 특정 대기이벤트로 대기하고있는지 보는 스크립트 
+부분범위처리시 부분범위를 처리한후 서버는 멀하고있을까
+SQL*Net message from client  … WAITING   자고있다.
+sqlplus 에서도 부분범위처리를 한다. show arraysize
+하지만 실제로 출력해보면 다 나온다. 그 이유는 멈추지 않고 계속 출력하기 때문이다.
+
+
+인덱스가 있음에도 인덱스를 안타는이유는?
+랜덤 액세스가 많기 때문에 Table Access ( By Index ROWID )
+또는 인덱스가 invisible 일때도 있다.
+
+first_rows 힌트 로 인덱스 손익분기점 한계 찾기 실습
+/*+first_rows */ 
+/*+first_rows(100) */
+/*+first_rows(1000) */ 
+select /*+first_rows */ * from big_table order by owner, object_name;
+인덱스는 오버바이컬럼에 있는 놈들로 구성되어있다.
+first_row 힌트를 써서 점점 늘려나가다 보면 어느순간 full scan 으로 바꾸는걸 볼수있다.
+
+
+top-N stop key
+중요한건 stop key 가 되려면 order by 바깥쪽 쿼리에 rownum 조건이 있어야 stopkey 가 되는거다.
+
+consistent gets : 읽은 블록
+
+게시판 페이징 처리 -> 내가 예전에 만들었던 게시판 소스의 쿼리문과 비교해보자.
+
+
+
+big_table 의 인덱스는 다음과 같다.
+
+pk : id
+big_tabe_x1 ; owner, created
+x2 ; object_id
+x3 : owner, object_type, object_id
+x4 : owner, object_name
+
+1. 아래 페이징 처리를 위한 최적의 인덱스를 구성하시오.
+select *
+from (
+    select rownum no, object_type, object_id, id, owner, object_name, subobject_name, data_object_id, created, last_ddl_time, timestamp, status, temporary, generated, secondary 
+    from (
+      select * from big_table a
+      where  owner = 'SYS'
+      and    created >= to_date('20100101', 'yyyymmdd')
+      order by  object_type, object_id
+    )
+    where rownum <= (:page * 10)
+)
+where no >= (:page-1)*:page_size + 1
+;
+
+
+2. 아래 페이징 처리를 위한 최적의 인덱스를 구성하시오.
+select *
+from (
+    select rownum no, object_type, object_id, id, owner, object_name, subobject_name, data_object_id, created, last_ddl_time, timestamp, status, temporary, generated, secondary 
+    from (
+      select * from big_table a
+      where  owner = 'SYS'
+      and    created >= to_date('20100101', 'yyyymmdd')
+      and    object_name like 'JAVA%'
+      order by  object_type, object_id
+    )
+    where rownum <= (:page * 10)
+)
+where no >= (:page-1)*:page_size + 1
+;
+
+
+      where  owner = 'SYS'
+      and    created >= to_date('20100101', 'yyyymmdd')
+      order by  object_type, object_id
+이럴땐 X3 타서 빨랐는데
+
+      where  owner = 'SYS'
+      and    created >= to_date('20100101', 'yyyymmdd')
+      and    object_name like 'JAVA%'
+      order by  object_type, object_id
+조건 하나더 붙으니깐 갑자기 느려졌다.
+
+이유는 ? Java 만족하는게 몇개 안된다. 데이터분포가 적다.
+해결방법은 ? X4 를 
+
+만족하는 데이터가 많으면 부분범위를 처리해서 빨리 데이터를 가져올수있지만
+데이터가 적으면 부분범위로 처리하면 안좋다.
+
+
+
+# JOIN
+
+테이블 랜덤액세스가 많은지
+인덱스 스캔이 효율적인지
+조인액세스가 많은지
+
+실습 6-64
+
+/* Buffer Cache Flushing */
+alter system flush buffer_cache;  
+
+select count(a.status), count(b.status)
+from   t_obj1 a, t_obj2 b
+where  a.object_id = b.object_id;
+
+
+[ 데이터 생성 스크립트 ]
+create table t_obj1 
+nologging
+as
+select * from all_objects where rownum <= 10000;
+
+drop table t_obj2 purge;
+
+create table t_obj2
+pctfree 70
+nologging
+as
+select y.no, x.*
+  from t_obj1 x
+     ,(select rownum as no from t_obj1 where rownum <= 500) y
+order by ora_hash(rownum, 10000000);
+
+
+alter table t_obj1 add constraint t_obj1_pk primary key(object_id) ;
+alter table t_obj2 add constraint t_obj2_pk primary key(object_id, no) ;
+
+exec dbms_stats.gather_table_stats(user, 't_obj1');  -- 통계정보 수집
+exec dbms_stats.gather_table_stats(user, 't_obj2');  -- 통계정보 수집
+
+
+QueryBox 에서 autotrace 는 ? 세션 통계 아이콘 , 실행하면  , 세션통계 탭에서 확인하면된다.
+sqlplus 에서는  set autotrace trace exp ;  으로 해라.
+
+
+실습 6-65
+
+drop table a purge;
+drop table b purge;
+drop table c purge;
+
+create table a
+as
+select * from scott.dept;
+
+create table b
+as
+select * from scott.emp;
+
+create table c
+as
+select * from scott.emp, (select rownum as no from dual connect by level <= 100);
+
+
+exec dbms_stats.gather_table_stats(user, 'a');
+exec dbms_stats.gather_table_stats(user, 'b');
+exec dbms_stats.gather_table_stats(user, 'c');
+
+
+select /*+                  */ * 
+from   a, b, c
+where  a.deptno = b.deptno
+and    b.empno  = c.empno
+
+ 
+조인은 한번에 두개씩 하는거다.
+
+1)
+select /*+  leading(a,b,c) use_hash(b) use_hash(c) no_swap_join_inputs(c)*/ *               
+from   a, b, c
+where  a.deptno = b.deptno
+and    b.empno  = c.empno;
+
+swap_join_inputs…
+no_swap_join_inputs(c)
+
+
+3)  leading( b,c,a )
+a 는 no swap join inputs
+

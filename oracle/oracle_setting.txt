@@ -1,0 +1,20 @@
+
+sqlplus 환경 구성
+vi $ORACLE_HOME/sqlplus/admin/glogin.sql
+set sqlprompt "_USER'@'_CONNECT_IDENTIFIER>"
+set linesize 500
+set pagesize 200
+set timing on
+
+define _editor=vi
+
+
+-- sqlplus 에서 화살표 사용하기
+yum install https://dl.fedoraproject.org/pub/epel/epel-release-latest-6.noarch.rpm
+yum install rlwrap
+
+vi  .bash_profile
+alias sqlplus='rlwrap sqlplus'
+
+
+

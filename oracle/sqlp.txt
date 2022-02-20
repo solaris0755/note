@@ -1,0 +1,1 @@
+index skip scan 원리, 선두컬럼 중간컬럼 , IN절

@@ -1,0 +1,1129 @@
+오라클 설치 
+OracleXE112_Win64 , 관리자 비번은 oracle 로 설정
+
+
+
+user 생성
+
+관리자로 접속
+C:\Users\stu25>sqlplus / as sysdba
+as sysdba, as sysoper, as sysasm 이런것들은 엄밀히 말해 ROLE 이다.
+
+hr 유저 비번및 락 해제 (비번은 hr)
+SQL> alter user hr identified by hr account unlock;
+
+hr 유저에게 권한 부여
+SQL> grant dba to hr;
+
+hr 유저로 접속
+SQL> conn hr/hr
+Connected.
+SQL> show user;
+USER is "HR"
+
+sql 파일 로드
+SQL> @D:\data\demobld.sql
+튕겨나가네
+
+hr 계정으로 접속
+C:\Users\stu25>sqlplus hr/hr
+
+터미널 화면에 보기 좋게 표시되도록 설정 ( 컬럼명 필드의 길이를 줄인다 )
+SQL> col 컬럼명 for a20;
+
+테이블 목록을 출력한다.
+SQL> select * from tab;
+
+테이블의 구조정보를 본다.
+SQL> desc emp;
+
+서버 끄기 (관리자로 접속후에 가능 )
+SQL> shutdown immediate
+Database closed.
+Database dismounted.
+ORACLE instance shut down.
+
+서버 켜기
+SQL> startup
+ORACLE instance started.
+
+
+test 계정만들고 테이블스페이스 따로 만들기
+
+ALTER USER SYSTEM IDENTIFIED BY ORACLE_4U
+
+DROP TABLESPACE TBS1 INCLUDING CONTENTS AND DATAFILES ;
+
+CREATE BIGFILE TABLESPACE TBS1
+DATAFILE 'TBS1.dbf' SIZE 100M AUTOEXTEND ON NEXT 20M MAXSIZE UNLIMITED
+EXTENT MANAGEMENT LOCAL UNIFORM SIZE 64K
+SEGMENT SPACE MANAGEMENT AUTO ;
+
+DROP USER test  CASCADE ;
+CREATE USER test  IDENTIFIED BY test DEFAULT TABLESPACE TBS1 ;
+
+GRANT DBA TO test ;
+CREATE OR REPLACE DIRECTORY data_dir AS 'c:\labs' ;
+
+
+그리고 커맨드라인에서
+impdp system/oracle directory=data_dir dumpfile=labs.dmp
+
+
+sqlplus
+
+기타 sql 명령어
+l  : 실행했던 명령어 보기
+ed :  명령어 수정
+r : 명령 실행
+/ : 명령 실행
+
+
+sqldeveloper
+셋업방식이 아니라 디렉토리복사해서 실행시킴
+
+sql
+null 과의 연산은 null 이된다.
+select 900+null from dual;
+
+null 처리 함수 NVL
+select nvl(null,0) from dual;
+
+null 과 not in  이슈
+where empno not in ( 5, null ); -- 아무결과도 나오지 않는다. 다음과 같은 쿼리이므로
+where empno !=5 and empno!=null  
+하지만
+where empno in ( 5,null ) ;  는 풀어보면
+where empno =5 or empno=null;  이므로 결과가 나온다.
+
+연결연산자 ( 문자열 결합 )
+select ename||sal from emp
+
+리터럴
+select ‘Hello ‘ || sal from emp
+잘응용하면 명령문도 리터럴로 일괄만들어낼수있다.
+
+홋따옴표를 표시하려면 홋따옴표를 두번
+select empno || ''' S ENAME IS ' || ENAME from EMP
+
+대체인용연산자 Q  ; 홋따옴표 두번쓰는 번거로움을 없애준다.
+select empno||Q'['S ENAME IS]'||ename from emp;
+select empno||Q'('S ENAME IS)'||ename from emp;
+select empno||Q'S'S ENAME ISS'||ename from emp;
+
+현재세션의 날짜형식을 변경한다.
+alter session set nls_date_format='YYYY/mm/dd';
+alter session set nls_date_format='YYYY/mm/dd HH24:MI:SS';
+
+오라클에는 date , datetime 이 따로 있지 않네
+sysdate 는 mysql 의 datetime 형식이므로 날짜만 저장할때는 주의해야한다.
+
+
+like 검색시 %가 들어있는것 검색방법
+select * from EMP where ename like 'PA@%%'escape'@'
+
+function 레퍼런스
+https://docs.oracle.com/cd/B19306_01/server.102/b14200/functions001.htm
+
+반올림, 내림등 관련 함수
+select round(2.53), ceil(2.53), trunc(2.53),floor(2.53) from dual
+
+NLS (National Langauage Support) 
+alter session set  nls_date_format='yyyy/mm/dd hh24:mi:ss';
+
+세션의 지역 변경
+alter session set nls_language='american';
+alter session set nls_language='korean';
+
+RR , YY => Y2K 이슈  … 세기가 빠져있고 현재년도에 따라서 달라짐
+YY 는 현재세기 가져와, RR 은 가까운 연도 가져와
+alter session set nls_date_format='rr-mm-dd';
+alter session set nls_date_format='yy-mm-dd';
+select * from emp where hiredate<'82-01-01'   이런쿼리는 엉뚱한 결과를 초래할수있음
+
+아래의 예제로 해보면 확인가능, 첫번째 쿼리그룹에선 2082년으로, 두번째는 1982로 
+drop table t1 purge;
+create table t1 (
+    col1 varchar2(10), 
+    col2 date
+)
+alter session set nls_date_format='yy/mm/dd';
+insert into t1 values (1, '82/01/01')
+alter session set nls_date_format='yyyy/mm/dd';
+select * from t1;
+
+alter session set nls_date_format='rr/mm/dd';
+insert into t1 values (2, '82/01/01');
+alter session set nls_date_format='yyyy/mm/dd';
+select * from t1;
+
+
+
+drop table t1 purge ;  -- 그냥 드랍하면 휴지통으로 이동하고 purge 옵션주면 휴지통에 안들어감
+
+타임존 변경
+alter session set time_zone='-07:00'; -- 미서부
+select sysdate, current_date,current_timestamp from dual;
+alter session set time_zone='+09:00'; -- 한국
+select SESSIONTIMEZONE FROM DUAL;
+
+데이터타입을 자세히 ( 아스키코드 레벨 ) 보려면 dump 함수쓰기
+select dump(7788), dump('7788') from dual;
+Typ=2 Len=3: 194,78,89
+Typ=96 Len=4: 55,55,56,56
+
+
+
+
+NVL2 : CASE WHEN expr1 = expr2 THEN NULL ELSE expr1 END
+null 과의 연산은 무조건 null
+length(null),  null+1, null*3  모두 결과는 null
+null 이면 count 에서도 제외된다. avg 에서도 null 을 제외한값만 평균을 낸다.
+select avg( NVL(commission_pct,0) ) from employees
+
+decode 함수
+select deptno, job, sal , decode(deptno, 10, sal*1.1, 20, sal*1.2  ,sal) from emp;
+
+case 표현식 ( simple case 표현식 )
+select deptno, job, sal, case deptno 
+when 10 then sal*1.1
+when 20 then sal*1.2
+else sal
+end
+from emp;
+
+case 표현식 ( searched case 표현식 )
+select deptno, job, sal, case
+when deptno=10 then sal*1.1
+when deptno=20 then sal*1.2
+else sal
+end
+from emp
+
+decode 와 case 가 항상 같은건 아니다.
+decode 는 함수이고 case 는 표현식이라 decode 의 결과는 문자열로 case 는 숫자형으로 나올수있음 => 출력된 데이터타입이 틀릴수있다.
+decode 는 출력된 결과의 첫번째값이 null이면 문자열로 처리된다.?
+select ename, decode(deptno,10,null,30,sal,sal),
+case deptno 
+when 10 then null
+when 30 then sal
+else sal end
+from emp
+
+
+
+
+non-equi join ; 조인조건이 equal 아닌 조인 방법
+select e.empno, e.sal,s.*
+from emp e, salgrade s
+where e.sal>=s.losal and e.sal<=s.hisal;
+
+self-join ; 랭킹을 구할때 유용하다
+select s.empno, count(1)
+from emp e, emp s
+where e.sal>s.sal
+group by s.empno
+order by 2;
+
+outer-join ; (+) 가 붙은쪽이 없는정보를 빈채로 보여겠다는거다.
+select e.employee_id, e.department_id, d.*
+from employees e, departments d
+where e.department_id = d.department_id(+)
+full outer join ; left, right 모두 나오게 하는 조인형태
+select e.ename, d.deptno, d.dname, d.loc
+from emp e full outer join dept d
+on e.deptno=d.deptno
+
+3way-join : join 키워드를 사용한 3개이상 테이블 조인형태 
+select e.ename, d.dname, d.loc, e.sal, s.grade
+from emp e
+join dept d on e.deptno=d.deptno
+join salgrade s on ( e.sal>s.losal and e.sal<=s.hisal )
+
+any,all 연산자 ( 다중행 서브쿼리와 단일행비교연산자와의 결합을 위한 키워드 )
+select * from employees where salary > any(9000,6000,4800,4200);   -- or
+select * from employees where salary > all(9000,6000,4800,4200);  -- and
+
+Correlated subquery ; 메인쿼리의 값이 서브쿼리에 전달되는 형태
+이걸활용하면 어려운 문제도 쉽게 풀수있다.
+각부서별 평균급여이상 받는 사원들 
+select *
+from employees e
+where salary >= ( 
+select avg(salary) from employees 
+where DEPARTMENT_ID=e.DEPARTMENT_ID 
+)
+join-update 문 ( corelated subquery )
+update emp1 
+set emp1.dname=(select dname from dept where dept.deptno=emp1.deptno)
+
+
+
+rownum 의 해석순서
+select * from emp where rownum<=10 order by hiredate;
+from -> where -> select -> order  이순서대로 실행되므로 
+순차적으로 10건을 먼저 자른후 그 10건을 가지고 정렬을 시키므로 엉뚱한 결과가 나옴
+
+rownum 의 특징 및 주의사항
+rownum=1; (O)
+rownum=5; (X)
+rownum<5; (O)
+rownum>5; (X)
+
+subquery는 group by 절외에는 모두 쓸수있다.
+select, from, where, having, order 절에 모두 쓸수있다.
+
+select, order 절의 서브쿼리는 스칼라서브쿼리(하나의필드만 리턴) 형태만 써야한다.
+from, where 절의 서브쿼리는 인라인뷰 라고 부른다.
+
+order by  절에 쓰는 서브쿼리 예제
+select employee_id,department_id
+from employees e
+order by 
+(select department_name from departments where department_id=e.department_id)
+
+
+exists 는 서브쿼리와 함께 사용한다. => 성능면에서 유리하다.
+사원이 존재하는 부서를 구한다.
+select * from departments d
+where exists ( select * from employees where department_id=d.department_id )
+
+사원이 존재하지 않는 부서구하기 ( not exists ; null이슈 무관 )
+select * from departments d
+where not exists ( select * from employees where department_id=d.department_id )
+
+
+
+Pairwise(쌍비교) Subquery
+Subquery가 한 번 실행되면서 두 개 이상의 컬럼을 검색해서 주 쿼리로 넘겨 준다.
+SELECT empno, sal, deptno   FROM emp
+WHERE (sal, deptno) IN (SELECT sal, deptno
+                          FROM emp  deptno = 30  comm is NOT NULL);
+
+
+집합연산자
+union all : 합집합 ( 중복허용 )
+union : 합집합 ( 중복제거)
+intersect : 교집합
+minus : 차집합
+
+근무하는 사원이 있는 부서
+select deptno from dept
+intersect
+select deptno from emp
+connected by 절
+connect by level  문법 : 임의의 데이터 생성 , 1~5까지의 결과가 출력이된다.
+select level from dual connect by level <=5;
+
+랜덤값
+select dbms_random.value(1,100) from dual connect by level<=5;
+
+대량의 데이터를 만들어내기 편한 방법이다.
+INSERT INTO DT_TEST
+SELECT LEVEL, 'A', 'B', 'C'
+FROM DUAL
+CONNECT BY LEVEL < 3000000;
+
+over 절
+select empno, ename, sal    , rank() over ( order by sal desc ) p from emp; -- 순위(공동존재)
+select empno, ename, sal    , dense_rank() over ( order by sal desc ) p from emp; -- 순위
+select empno, ename, sal    , rank() over ( order by sal desc, ename desc ) p from emp;
+select empno, ename, sal    , row_number() over ( order by sal desc ) p from emp;
+
+avg(sal) over() --  전체 평균
+
+over 절에 사용되는 order by 말고 partition by 는 group by 와 비슷한개념
+부서내의 급여순위
+select deptno, empno, job, sal
+    , rank() over ( partition by deptno order by sal desc ) dept_rank
+from emp
+
+
+
+rollup, cube : group by 와 함께 쓰이면서 집계가된다. ( 소계, 합계가 나온다 )
+select deptno, job, sum(sal)
+from emp
+group by deptno, job
+order by 1,2
+select deptno, job, sum(sal)
+from emp
+group by rollup(deptno, job)
+order by 1,2
+
+
+
+
+rollup 의 분해작업
+오른쪽부터 한개씩 접어간다.
+cube 의 분해작업
+2^N 경우의수를 만든다.
+group by deptno, job
+group by deptno, null
+group by null, null
+group by deptno, job
+group by deptno, null
+group by null, job
+group by null, null
+
+
+rollup 의 경우의수 :  rollup( a, b, c ) 
+경우의수 = N+1
+cube 의 경우의 수 :  cube( a, b, c ) 
+경우의 수 = 2^N
+a,b,c
+a,b,N
+a,N,N
+N,N,N
+a,b,c
+a,b,N
+a,N,c
+N,b,c
+a,N,N
+N,b,N
+N,N,c
+N,N,N
+
+
+group by 절에 부분적으로 rollup 을 쓸수 있다.
+select deptno, job, to_char(hiredate,'yyyy'), sum(sal)
+from emp
+group by deptno, rollup(job,to_char(hiredate,'yyyy'))
+order by 1,2,3
+
+
+어떻게 그룹핑이 된건지 명확하게 알고싶을땐
+select deptno, job, sum(sal)
+    , grouping(deptno), grouping(job), grouping_id(deptno, job)
+from emp
+group by rollup(deptno,job)
+order by 1,2
+
+
+
+rollup 시 소계, 총계등을 다양하게 조절할수있는 방법
+rollup( empno, deptno )
+rollup( (empno, deptno) )  ; 괄호로 묶으면 한개로 움직인다.
+rollup( null, (empno, deptno) ) ; null 을 넣을수있다.
+rollup( 1, (empno, deptno) ) ; 상수를 넣을수있다. null 과는 다른값이 출력될수있다.
+rollup( 1,deptno,null,(empno,ename) )
+
+
+
+pivot
+select * from (
+    select job,deptno, sal
+    from emp
+)
+pivot(
+    sum(sal) as sum
+    for deptno in (10,20,30)
+)
+
+
+
+pivot 이용해서 달력만들기
+select sun,mon,tue,wed,thu,fri,sat 
+from (
+    select week, yoil, amt
+    from (
+        select time_id, amt
+        , to_char(time_id,'d') yoil
+        , ceil((time_id-trunc(time_id,'month')+to_char(trunc(time_id,'month'),'d') )/7) week
+        from (
+            select time_id, sum(amount_sold) amt
+            from sales 
+            where to_char(time_id,'yyyymm')='199805'
+            group by time_id
+        )    
+    )
+)
+pivot(
+    sum(amt) 
+    for yoil in (1 as SUN,2 as MON,3 as TUE,4 as WED,5 as THU,6 as FRI,7 as SAT)
+)
+order by week;
+
+
+create 테이블  as select *
+이런식으로 insert 된 데이터는 자동 커밋이다.
+
+insert 이후에 DDL (create,alter, drop, truncate) 을 실행하면 자동으로 commit 된다.
+전혀 다른 테이블을 create 하더라도 commit 된다.
+create 문은 실제로     commit; create문; commit; 이런식으로 실행된다.
+truncate 도 마찬가지이다. commit; truncate; commit 이다.
+DDL 문은 {commit} DDL {commit} 이다.
+
+
+
+savepoint : 특정시점으로 rollback 
+
+SQL> savepoint update_done;  -- 특정시점을 저장
+SQL> rollback to update_done;  -- 저장된 시점으로 복귀
+SQL> rollback;  -- 전부다 롤백된다.
+
+
+읽기 일관성 ; 커밋된것만 읽는다.
+
+update wating
+다른세션에서 같은 필드 업데이트시 두번째 업데이트 하는경우엔 대기상태가 된다.
+다른세션이 커밋되는 순간 대기상태는 끝난다.
+
+select wating
+select * from books where no=4000 for update
+다른세션에서 업데이트될때까지 기다린다.
+
+select * from books where no=4000 for update wait 5
+5초간 기다려도 응답 없으면 에러를 리턴한다.
+ORA-30006: resource busy; acquire with WAIT timeout expired
+
+select * from books for update skip locked;
+다른세션에서 변경중인 로우는 스킵하고 가져오지 않는다.
+
+
+FlashBack : 커밋하기전의 데이터를 본다.
+select to_char(sysdate,'yyyy/mm/dd hh24:mi:ss') ti from dual;
+-- 2020/05/11 14:57:41
+update emp set sal=sal*1.2 where empno=7788;
+commit;
+
+-- 특정시간꺼 보기
+select * 
+from emp as of timestamp to_date('2020/05/11 14:57:41','yyyy/mm/dd hh24:mi:ss')
+where empno=7788;
+
+-- 10분전꺼 보기
+select * 
+from emp as of timestamp to_date(sysdate - interval '10' minute)
+where empno=7788
+
+-- 변경목록 보기
+select empno, sal , versions_starttime,versions_endtime,versions_startscn, versions_endscn
+from emp versions between timestamp minvalue and maxvalue 
+where empno=7788
+
+-- 특정시점으로 값을 되돌리기
+update emp 
+set sal=(select sal from emp as of scn 580013
+    where empno=7788)
+where empno=7788    
+
+
+
+
+
+datatype
+
+char 타입의 특징
+--create table t1 (c1 char(5), c2 varchar2(5))
+--insert into t1 values ('ABC','ABC')
+char(5) 타입에 ‘ABC’ 를 입력하면 2바이트는 공백문자로 채워진다.
+따라서 length 함수로 하면 5 가 나온다.
+dump함수를 쓰면 아스키코드로 데이터를 조회할수있다.
+select dump(c1) from t1; -- Typ=96 Len=5: 65,66,67,32,32
+select * from t1 where c1='ABC ' -- 찾아진다.
+select * from t1 where c1='ABC' -- 찾아진다.
+char타입은 where 절에서 찾을때 5바이트를 다 채워준후에 찾는다.
+select * from t1 where c1=c2||'  ';
+select * from t1 where trim(c1)=c2;
+
+
+
+number 타입의 특징 
+number( n, m ) -- n 은 사용가능한 자리수, m 은 소숫점 자리수
+number( 4, 2 ) -- 정수2자리, 소숫점이하 2자리
+number( 2, 4 ) --  소숫점이하4자리까지 쓸수있는데 두자리만 사용가능, 0.0012
+number( 4, 0 ) -- 정수자리만 4자리 사용가능, 물론 1-3자리도 허용됨
+number( 4, -1) -- 12340 , 10 이렇게 1의자리가 무조건 0 인형태
+
+
+primary key 와 unique 의 차이
+unique 는 null을 허용하지만 primary key 는 허용하지 않는다.
+즉, primary key = unique + not null
+
+foreign key
+departments.department_id  는 employees.department_id 의 foreign key 이다.
+departments 는 employees 의 부모테이블이다.
+부모테이블을 drop 시킬려고 하면 foreign key 제약으로 인해 실패한다.
+
+제약조건 constraint
+
+컬럼단위 제약조건 : 제약조건 명을 안적어주면 오라클이 알아서 이름을 지정한다.
+create table t_dept
+(deptno number(2) constraint t_dept_deptno_pk primary key,
+dname varchar2(10) constraint t_dept_dname_nn not null,
+loc varchar2(10));
+
+
+테이블단위 제약조건 : 컬럼명을 추가적으로 지정해줘야한다.
+create table t_dept (
+deptno number(2),
+dname varchar2(10),
+loc varchar2(10),
+constraint t_dept_deptno_pk primary key(deptno),
+constraint t_dept_dname_nn check (dname is not null)
+);
+
+
+반드시 테이블단위 제약조건을걸어야하는 경우
+; 두개이상의 컬럼으로 하나의 제약을 거는경우   unique(jumin1,jumin2)
+
+제약 조건 목록 보기 : user_constraints 테이블을 조회하면된다.
+select constraint_name from user_constraints where table_name like 'T_%'
+
+테이블별 컬럼 정보 보기 ; user_tab_columns
+select * from user_tab_columns where table_name='EMP'
+
+
+default 값
+alter table emp modify (hiredate date default trunc(sysdate));
+update emp hiredate=DEFAULT where empno=7788; -- DEFAULT 가 예약어로 사용가능함
+
+제약조건이 있는 테이블을 아래와 같이 create as 로 생성한다면 constraint 가 모두 사라진다.
+create table t2_dept as select * from t_dept;  
+select * from user_constraints where table_name in ( 'T2_DEPT'); -- no rows
+
+alter constraint 명령
+alter table t2_dept add constraint dept_pk primary key(deptno);
+alter table t2_emp add unique(ename);
+alter table t2_emp modify ename not null;
+alter table t2_dept drop constraint dept_pk;
+
+foreign key 생성에서 삭제룰 주면
+alter table emp 
+add constraint e_fk foreign key (deptno)  references dept (deptno) 
+on delete cascade;
+dept 에서 20번부서를 삭제하면 emp 테이블에서도 20번부서소속 사원이 다 지워진다.
+
+
+constraint 를 disable 시킬수도있다.
+alter table t2_emp disable constraint emp_fk;
+alter table t2_emp enable constraint emp_fk;
+
+constraint 를 일괄로 지우고 싶다면
+select listagg('alter table '||table_name|| ' drop constraint '||constraint_name, ';'|| chr(13)||chr(10))
+    within group (order by 1)
+from user_constraints 
+where table_name in ('T2_EMP')
+
+
+alter column 명령
+alter table t2_emp add (dname varchar2(10));
+alter table t2_emp modify (dname varchar2(20));
+alter table t2_emp drop (dname);
+alter table t2_emp rename column ename to name; -- 컬럼명 변경
+alter table t2_emp set unused column sal; -- 컬럼을 사용않겠다. 복구불가(drop 전에사용)
+alter table t2_emp read only; -- 읽기 전용 테이블
+alter table t2_emp read write; -- 읽기 전용 테이블 해제
+
+
+컬럼삭제시에 제약조건이 걸려있다면 삭제가 안될수있는데 그 제약조건까지 같이 삭제시켜주는 방법이 있다.
+alter table e drop column empno cascade constraints;
+
+테이블명 변경
+alter table departments rename to departments2;
+
+
+create as select 를 했다고 해서 제약조건이 다 빠지는건 아니다.
+create table e as select * from emp; -- not null 제약조건은 따라오더라.
+index
+create index emp_ename_idx on emp(ename);
+drop index emp_ename_idx;
+select * from user_indexes where table_name='EMP'  -- 테이블관련 인덱스
+select * from user_ind_columns where table_name='EMP' -- 테이블관련 인덱스컬럼
+
+실행계획 보기
+SQL> set autotrace on explain
+
+user_recyclebin ; 휴지통 
+drop table t2_emp;
+select object_name, original_name, type , droptime from user_recyclebin;
+select * from "BIN$AoOibdOiQBGU54lkzGIOcA==$0";
+flashback table t2_emp to before drop rename to re_t2_emp;-- 다시 살려내기
+purge recyclebin; -- 휴지통 비우기
+
+temporary table;  세션 임시테이블 
+테이블의 구조는 다른세션에도 확인이 가능하지만 데이터는 해당세션에서만 존재
+세션이나 트랜잭션이 끝나면 데이터는 자동으로  truncate 됩니다.
+create global temporary table temp1(id number,name varchar2(10)) 
+on commit delete rows; -- 커밋되면 데이터는 사라진다.
+create global temporary table temp2(id number,name varchar2(10)) 
+on commit preserve rows; -- 커밋되도 데이터가 사라지지 않는다.
+
+sequence ; 시퀀스
+create sequence dept_seq 
+    start with 1
+    increment by 1
+    maxvalue 999
+    minvalue 1
+    cache 2
+;
+select dept_seq.currval from dual; -- 에러 / 최초한번 nextval 호출을 해줘야됨
+select dept_seq.nextval from dual;     
+select dept_seq.currval from dual;  
+
+rollback 을 해도 시퀀수는 원래대로 돌아가지 않는다.
+drop sequence dept_seq;
+select * from user_objects where object_type='SEQUENCE';
+select * from user_sequences;
+
+시퀀스 cache 를 설정하면 값을 미리 캐쉬에 만들어놓는다는것이다.
+그렇다면 어떤 문제로 캐쉬가 날라가면 시퀀스가 순차적으로 올라가지 않을수있단것이다.
+어떤 문제 예) SQL> shutdown abort     --- 이렇게 종료된후 재시작되면 시퀀스가 소실된다.
+( SQL> shutdown immediate (정상종료)는  괜찮다 )
+
+create 문에서 사용할수도있다.
+CREATE TABLE emp (a1 NUMBER DEFAULT s1.NEXTVAL NOT NULL);
+
+
+cycle 과 cache 이슈
+create SEQUENCE seq_dept_e2
+  start with 1000
+  minvalue 1000
+  MAXVALUE 1010
+  cycle 
+;
+ORA-04013: number to CACHE must be less than one cycle
+04013. 00000 -  "number to CACHE must be less than one cycle"
+*Cause:    number to CACHE given is larger than values in a cycle
+*Action:   enlarge the cycle, or cache fewer values
+
+cache 의 기본값이 20 인데 위의 1싸이클이 11 이므로 위의 에러가 나옴
+
+cache alter 명령
+alter sequence seq_dept_e5 
+maxvalue 1300
+cache 5;
+
+alter sequence seq_dept_e5
+start with 1006;
+ORA-02283: cannot alter starting sequence number
+
+
+
+synonym ; 동의어
+create synonym ee for employees;
+drop synonym ee;
+select * from user_objects where object_type='SYNONYM';
+select * from user_synonyms;
+user_objects
+SQL> select distinct object_type from user_objects; 
+OBJECT_TYPE
+--------------------------------------
+SEQUENCE
+PROCEDURE
+TRIGGER
+TABLE
+INDEX
+VIEW
+SYNONYM 
+
+view
+create view vtest1 as select empno,ename,sal from emp;
+alter 로는 뷰를 변경할수없다.
+create or replace view … 로 변경한다.
+drop view vtest1;  으로 삭제한다. purge 옵션은 없다. 저장공간이 없기 때문에
+
+테이블이 없어도 강제로 뷰를 만들수 있다. force 옵션
+create force view vemp1  as  select * from emp1;
+
+뷰에 제약조건 걸기 : 업데이트 제한을 주기위해서
+create view v_emp_20
+as
+select * from emp where deptno=20
+with check option constraint v_emp_20_ck;
+
+update v_emp_20 set deptno=10; -- 에러
+
+뷰의 컬럼은 업데이트가 될수도 있고 안될수도있다.
+단일컬럼은 업데이트가 되나, virtual 컬럼등은 업데이트안된다.
+아래의 딕셔너리를 통하면 업데이트할수있는컬럼인지 확인이 가능하다.
+select * from user_updatable_columns where table_name='v_emp’;'
+
+
+dictionary
+select * from dictionary ; -- 모든 딕셔너리 테이블/뷰의 목록을 보여준다.
+select * from dictionary where table_name='USER_OBJECTS' -- user_objects 의 소개
+
+어떤 테이블 & 컬럼에 제약조건이 걸려있는지 조회
+select c.column_name,t.*
+from user_constraints t, user_cons_columns c
+where t.table_name=c.table_name
+
+user_*, all_* 딕셔너리의 차이
+select * from all_views where owner='HR';
+select * from user_views;
+
+테이블의 실제위치 파일명 찾아보기
+select table_name, b.tablespace_name, c.file_name
+from dba_tables a, dba_tablespaces b, dba_data_files c
+where a.tablespace_name=b.tablespace_name
+and b.tablespace_name=c.tablespace_name
+and table_name='EMP'
+and b.tablespace_name='USERS'
+
+
+사용자권한 관리
+
+sqlplus 에서 프롬프트변경
+cd %ORACLE_HOME%/sqlplus/admin/glogin.sql
+set sqlprompt "_USER'@'_CONNECT_IDENTIFIER>"
+sqlplus hr/hr
+HR@XE>   ( 프롬프트가 이렇게 변한다.  사용자명@인스턴스 )
+HR@XE>drop user ora01;  -- 사용자 삭제
+HR@XE>create user ora01 identified by ora01;  -- 유저 생성 ( DBA 권한이 있어야 가능 )
+HR@XE>conn / as sysdba    -- dba 로 접속
+SYS@XE>revoke dba from hr;  -- hr 한테서 dba 권한 뺏기
+HR@XE>drop user ora01;  -- 권한이 없어서 유저 삭제가 안됨
+HR@XE>select * from user_sys_privs;  -- 시스템 권한 보기
+CREATE VIEW         
+CREATE DATABASE LINK
+CREATE SEQUENCE     
+CREATE SESSION      
+ALTER SESSION       
+CREATE SYNONYM      
+SYS@XE>grant create user to hr ; -- 유저 생성권한 주기
+SYS@XE>alter user ora01 account lock;  -- ora01 계정 잠그기
+
+위에서 만든 ora01 계정으로 접속해보기
+λ sqlplus ora01/ora01
+ERROR:
+ORA-28000: the account is locked
+
+SYS@XE>alter user ora01 account unlock;  -- ora01 계정 잠금풀기
+λ sqlplus ora01/ora01
+ERROR:
+ORA-01045: user ORA01 lacks CREATE SESSION privilege; logon denied
+
+SYS@XE>grant create session to ora01;  -- 세션 생성 권한 주기
+
+λ sqlplus ora01/ora01
+ORA01@XE>   -- 접속 성공
+ORA01@XE>select * from user_sys_privs; -- CREATE SESSION 권한 뿐임
+
+HR@XE>create table z ( col1 number);
+ERROR at line 1:
+ORA-01536: space quota exceeded for tablespace 'USERS' -- 용량 초과
+
+SYS@XE>grant unlimited tablespace to hr;  -- hr유저에게 용량권한주기, create table 가능
+HR@XE>select * from session_privs;
+                                  
+PRIVILEGE                         
+--------------------              
+CREATE SESSION                    
+ALTER SESSION                     
+UNLIMITED TABLESPACE              
+CREATE USER                       
+CREATE TABLE                      
+CREATE CLUSTER                    
+CREATE SYNONYM                    
+CREATE VIEW                       
+CREATE SEQUENCE                   
+CREATE DATABASE LINK              
+CREATE PROCEDURE                  
+CREATE TRIGGER                    
+CREATE TYPE                       
+CREATE OPERATOR                   
+CREATE INDEXTYPE                  
+
+SYS@XE>drop user ora01 cascade;
+SYS@XE>create user ora01 identified by ora01; 
+SYS@XE>grant create session,create table,create view,unlimited tablespace to ora01;
+SYS@XE>alter  user ora01 default tablespace users;
+
+
+시스템 권한은 어떤게 있나?
+ORA01@XE>select * from system_privilege_map;  -- 208 rows selected. (버전별로 다르다)
+
+ora01 은 hr 의 테이블에 접근이 안된다.
+ORA01@XE>select * from emp;
+ORA-00942: table or view does not exist
+
+HR@XE>grant select on emp to ora01; -- ora01 에게 emp 의 select 접근권한을 준다.
+ORA01@XE>select * from hr.emp;  -- 실행된다.
+HR@XE>grant update on emp to ora01; -- update 권한 주기 ( 테이블단위 )
+HR@XE>revoke update on emp from ora01; --update 권한 뺐기
+HR@XE>grant update(sal) on emp to ora01;  -- 컬럼 단위 update 권한을 줄수도있다.
+
+테이블 소유자와 권한을 준 사람등의 정보를 볼수있는 딕셔너리
+HR@XE>select grantee, owner,table_name, grantor, privilege from user_tab_privs;
+
+HR 이 부여한 객체 ( hr 이 ora01 에게 부여한 정보를 볼수있다 )
+HR@XE>select * from user_tab_privs_made;
+
+ORA01 이 부여받은 객체
+ORA01@XE>select * from user_tab_privs_recd;
+
+ORA01@XE>select * from user_col_privs; -- 컬럼별 권한을 받은것도 조회
+ORA01@XE>select * from user_col_privs_made;  -- 컬럼별 권한 준거
+ORA01@XE>select * from user_col_privs_recd; -- 컬럼별 권한 받은거
+
+ora01 이 받은 권한 보기
+SYS@XE>select * from dba_sys_privs where grantee ='ORA01';
+SYS@XE>select * from dba_tab_privs where grantee ='ORA01';
+
+ora01 에게 준 권한 뺐기 쿼리 자동생성
+SYS@XE>select 'revoke ' ||privilege || ' on ' || owner || '.' || table_name || ' from ' || grantee||';' from dba_tab_privs where grantee ='ORA01';
+
+SYS@XE>select 'revoke ' ||privilege || ' on ' || owner || '.' || table_name || ' from ' || grantee||';' from dba_col_privs where grantee ='ORA01';
+
+role (권한들의 묶음)
+유저에게 개별로 권한을 주던걸 “역할” 이라는거에 권한을 주고 그 역할을 유저에게 주면 편리
+create role dev_gb;
+grant create session,create table,create view to dev_gb;
+grant select on ora01.ora_emp to dev_gb;
+grant select on ora01.ora_dept to dev_gb;
+
+grant dev_gb to ora02;
+
+권한을 준후 ora02 는 세션을 다시 시작해야 적용이 된다.
+select * from dba_tab_privs where grantee='DEV_GB'
+
+
+계층쿼리 ( Hierarchical Query )
+king (사장) 을 필두로 hierachical 하게 출력하라.
+select ename,empno, mgr
+from emp
+start with empno =7839
+connect by prior empno=mgr;
+하지만 비쥬얼하게 구분이 가지는 않는다. 그래서 level 을 이용하자.
+
+select lpad(' ',(level-1)*2,' ')||ename name,level,empno, mgr
+from emp
+start with empno =7839
+connect by prior empno=mgr;
+
+분기를 제거하려면 connect by  에 조건을 추가할수있다.
+select lpad(' ',(level-1)*2,' ')||ename name,level,empno, mgr
+from emp
+start with empno =7839
+connect by prior empno=mgr and ename !=’SCOTT’;
+-- scott 과 그의 하위노드인 adams 모두 사라진다.
+
+상사의 이름과 급여 출력하고(조인하지 않고),
+트리구조를 무너뜨리지 않고 ename 순으로 정렬되게 order siblings by
+select lpad(' ',(level-1)*2,' ')||ename name,level,empno, mgr
+, prior ename m_name, prior sal, connect_by_root sal
+from emp
+start with empno =7839
+connect by prior empno=mgr
+order SIBLINGS by e.ename
+
+prior 가 상위 노드라면  루트노드는 connect_by_root
+
+
+path 를 보고싶을때 
+select sys_connect_by_path(ename,'/') from emp
+start with empno=7839
+connect by prior empno=mgr;
+
+
+with 구문
+서브쿼리처럼 쓸수있지만 , 서브쿼리보다는 훨씬 자유롭게 전역적으로 활용이 가능한 마치 임시테이블 처럼 사용가능한다.
+with 절에 선언한 임시테이블 이름으로 조인이나 서브쿼리 절에 사용가능하다.
+with t as (
+    select deptno, sum(sal) su_sal 
+    from emp
+    group by deptno
+)
+select dept.* , (select su_sal from t where deptno=dept.deptno)
+from dept;
+
+
+with t as (
+    select deptno, sum(sal) su_sal 
+    from emp
+    group by deptno
+)
+select dept.* , t.su_sal
+from dept
+left join t
+on dept.deptno=t.deptno;
+
+
+쿼리 전반적으로 어디에서도 쓰일수있다.
+with cust as ( select cust_id, cust_lname from customers where city='Asten')
+select tt.cust_id, cust.cust_lname, tt.product_id, tt.wish_tot, tt.order_tot
+from cust, (
+    select cust_id,product_id, sum(wt) wish_tot, sum(ot) order_tot
+    from (
+    
+        select cust_id,product_id,unit_price*quantity wt, 0 ot
+        from wishlist
+        where deleted='N' and cust_id in ( select cust_id from cust)
+        
+        union all
+        
+        select od.cust_id, it.product_id, 0, it.unit_price*it.quantity
+        from orders od
+        join order_items it on od.order_id=it.order_id
+        where cust_id in ( select cust_id from cust )
+    ) t
+    group by cust_id,product_id
+)tt
+where cust.cust_id=tt.cust_id
+order by 1,3
+
+
+with 절에 두개이상 선언가능하다.
+with t as ( select 'hello' col from dual)
+     ,z as ( select 'kkk' col from dual)
+select sysdate from dual
+
+
+
+
+recursive with 구문 : 컬럼명을 나열해준다.
+connect by  를 아래걸로 대체
+with htree (hlevel, ename, empno, mgr)
+as
+(
+select 1,ename,empno, mgr
+from emp
+where mgr is null
+union all
+select hlevel+1, e.ename, e.empno, e.mgr
+from emp e, htree h
+where e.mgr = h.empno
+)
+search depth first by empno asc set te
+select lpad(' ', (hlevel-1)*2, ' ')||ename name, hlevel, empno, mgr, te
+from htree
+
+
+
+
+
+
+분석함수
+
+부서별 급여합계 ; 마치 그룹핑 한것 같다.
+select deptno, sum(sal) over (partition by deptno) as dept_total from emp;
+
+전체 평균과 부서별 평균
+select avg(sal) over(), avg(sal) over(partition by deptno) from emp;
+
+부서별 급여순위
+select empno, ename, sal, deptno
+,row_number() over ( partition by deptno order by sal desc ) rnum 
+from emp; 
+
+nulls first : null 값이 먼저 나오게
+select empno, ename, sal, deptno
+,dense_rank() over (order by comm asc ) as no1
+,dense_rank() over (order by comm asc nulls first) as no2
+from emp where deptno=30
+
+windowing
+select empno, ename,sal
+,sum(sal) over ( order by empno rows 1 preceding) as p1
+,sum(sal) over ( order by empno rows between 1 preceding and 1 following) as physical
+,sum(sal) over ( order by empno range between 100 preceding and 100 following) as logical
+from emp where deptno in (10,20) order by empno
+
+
+
+
+누적합계 구하는 법
+
+-- corelated subquery
+select empno, ename, sal, (select sum(sal) from emp where empno<=e.empno) from emp e order by empno;
+
+
+-- 통계함수
+select empno, ename, sal, sum(sal) over ( order by empno rows 1000 preceding ) from emp order by empno;
+select empno, ename, sal, sum(sal) over ( order by empno rows unbounded preceding ) from emp order by empno;
+select empno, ename, sal, sum(sal) over ( order by empno rows between unbounded preceding and current row) from emp order by empno;
+
+-- self join
+with t as(
+    select e.empno, sum(n.sal) sal
+    from emp e, emp n
+    where e.empno >=n.empno
+    group by e.empno
+)
+select empno,ename, sal
+, (select sal from t where empno=e.empno) total 
+from emp e
+order by 1
+
+
+
+다중 INSERT
+-- 2 개의 테이블에 한꺼번에 INSERT
+insert all
+    into mgr_hist values ( employee_id,last_name, hire_date, manager_id)
+    into sal_hist values ( employee_id,last_name, hire_date, salary)   
+select employee_id, last_name,hire_date, manager_id, salary from employees
+-- 조건별 다중 INSERT
+insert all
+    when hire_date< to_date('2005/12/31', 'yyyy/mm/dd') then
+        into sal_hist values (employee_id,last_name,hire_date,salary)
+    when hire_date> to_date('2005/01/01', 'yyyy/mm/dd') then
+        into mgr_hist values (employee_id,last_name, hire_date, manager_id)
+select employee_id, last_name,hire_date, manager_id, salary from employees
+-- 조건별 다중 INSERT First  ( 조건에 맞는거가 있으면 insert 하고 다른건 처리안함 )
+insert first
+    when hire_date< to_date('2005/12/31', 'yyyy/mm/dd') then
+        into sal_hist values (employee_id,last_name,hire_date,salary)
+    when hire_date> to_date('2005/01/01', 'yyyy/mm/dd') then
+        into mgr_hist values (employee_id,last_name, hire_date, manager_id)
+select employee_id, last_name,hire_date, manager_id, salary from employees
+
+
+
+pivot <-> unpivot 변환
+create table source_data (empno number(4)
+,week_id number(2)
+,sales_mon number(4)
+,sales_tue number(4)
+,sales_wed number(4)
+,sales_thu number(4)
+,sales_fri number(4));
+
+insert into source_data values (100,1,1000,1200,500,600,1300);
+insert into source_data values (101,1,1200,1300,1500,600,1000);
+select * from source_data;
+
+create table sales_info(empno number(4),week_id number(2), day varchar2(4), sales number(4));
+desc sales_info;
+
+insert all
+    into sales_info values (empno, week_id,'MON',sales_mon)
+    into sales_info values (empno, week_id,'TUE',sales_tue)
+    into sales_info values (empno, week_id,'WED',sales_wed)
+    into sales_info values (empno, week_id,'THU',sales_thu)
+    into sales_info values (empno, week_id,'FRI',sales_fri)
+select * from source_data;
+
+select * from sales_info;
+
+-- 피봇
+select * from (
+    select day,sales from sales_info
+)
+pivot(
+    sum(sales)
+    for day in ('MON','TUE','WED','THU','FRI')
+)
+
+-- 언피봇
+select empno, week_id, substr(day,7) as day, sales
+from source_data
+unpivot (sales for day in (sales_mon,sales_tue,sales_wed,sales_thu, sales_fri));
+
+
+
+
+Merge ; insert or replace
+merge into copy_emp c
+using employees e
+on ( c.employee_id=e.employee_id)
+when matched then
+    update set c.salary=e.salary, c.commission_pct=e.commission_pct
+when not matched then
+    insert values ( e.employee_id, e.first_name, e.job_id
+        , e.manager_id, e.hire_date
+        , e.salary, e.commission_pct, e.department_id);
+
+
+

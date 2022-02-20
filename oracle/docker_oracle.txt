@@ -1,0 +1,13 @@
+root@dl360:/home/dev# docker ps -a
+CONTAINER ID   IMAGE                             COMMAND                  CREATED          STATUS          PORTS                                                         NAMES
+e9da5f5c0081   oracleinanutshell/oracle-xe-11g   "/bin/sh -c '/usr/sb…"   16 minutes ago   Up 16 minutes   22/tcp, 8080/tcp, 0.0.0.0:1521->1521/tcp, :::1521->1521/tcp   confident_johnson
+
+
+root@dl360:/home/dev# docker exec -it e9da5f5c0081 /bin/bash
+root@e9da5f5c0081:/# sqlplus system/oracle
+
+root@e9da5f5c0081:/# env |grep ORACLE
+ORACLE_SID=XE
+ORACLE_HOME=/u01/app/oracle/product/11.2.0/xe
+
+

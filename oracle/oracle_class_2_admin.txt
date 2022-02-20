@@ -1,0 +1,1947 @@
+kill sessioninstance = SGA, PGA, 저장영역
+
+PGA :  유저 접속시 마다 생긴다
+SGA ;  공유메모리 구조, 여러 PGA 들이 접근한다.
+
+리두로그 버퍼 : 모든변경사항들을 기록하는 버퍼 <-> 온라인리두로그파일
+데이터베이스버퍼캐쉬 <-> 데이터베이스파일
+
+컨트롤 파일
+데이터베이스 파일
+리두로그 파일
+
+shared pool ; 우리보라고 만든 영역은 아니다.
+
+SGA 에 대한 정보보기
+SQL> select * from v$sga;
+
+NAME			  VALUE     CON_ID
+-------------------- ---------- ----------
+Fixed Size		2926472 	 0
+Variable Size	      209717368 	 0
+Database Buffers      318767104 	 0
+Redo Buffers		5459968 	 0
+
+
+
+
+라이브러리 캐시 : 유저프로세스에서 받은 SQL 을 파싱한 정보를 저장하는영역
+공유 SQL 영역 : p-code, 실행정보, 작성코드
+SQL 이 처리되는 과정
+parse ; 
+syntax 체크 : sql 의 문법검사
+semantic & privilege check : 테이블과 컬럼들의 정보를 확인, 권한 확인, p-code 생성
+shared pool check : soft parse  or Hard parse
+
+
+
+데이터 딕셔너리 캐시 ( 로우캐시 ) ; 데이터딕셔너리 정보를 캐싱한다
+
+server result cache (서버결과 캐시) : 11g 버전부터 나옴, 결과셋을 캐싱
+-- result 캐시를 사용하는 SQL  힌트
+select /*+ result_cache */ ename from emp where deptno=10;
+
+
+SQL> show parameter result
+
+NAME                           TYPE        VALUE  
+------------------------------ ----------- ------ 
+client_result_cache_lag        big integer 3000   
+client_result_cache_size       big integer 0      
+result_cache_max_result        integer     5      
+result_cache_max_size          big integer 0      
+result_cache_mode              string      MANUAL 
+result_cache_remote_expiration integer     0      
+
+
+
+
+reserved pool (예약풀) ; 메모리가 부족해서 sql 이 실행안되는 문제가 발생하지 않도록 잡아놓은 영역
+show parameter shared_pool_re
+
+NAME                      TYPE        VALUE   
+------------------------- ----------- ------- 
+shared_pool_reserved_size big integer 8808038 
+
+
+
+데이터베이스 버퍼캐시  : 디스크로부터 블록단위로 가져온 메모리 공간
+parse-> execute -> (bind) ->fetch   에서 execute 단계에서하는것이 디스크로부터 데이터버퍼캐시로 올리는 작업이다.
+최대한 디스크I/O 를 줄이기위한 목적으로 만들어진것이 데이터 버퍼캐시이다.
+LRU 알고리즘 
+
+
+Redo Log Buffer (리두로그버퍼)
+모든변경사항을 담아두는 메모리 영역, 순환구조
+데이터베이스버퍼캐시보다 리두로그 버퍼에서 디스크에 쓰는게 더 비용이 적다.
+Large Pool 
+shared pool 의 활용을 증대하기위해 큰공간이 필요한 작업에 대해서 활용되는 영역
+shared pool 은 오랫동안 사용하기위한 영역이고 large pool 은 잠깐 활용하기위한 영역
+
+
+리스너 
+유저프로세스의 요청을 받아들이고 서버프로세스를 생성한후 연결시켜준다.
+오라클 넷서비스의 프로세스이다.
+
+서버프로세스
+로그인하면 생기고, 로그아웃하면 없어진다.
+
+백그라운드프로세스
+항상 떠있다. 다양한 프로세스가 있다.
+
+DBWn : 
+데이터버퍼캐시의 데이터를 디스크에 기록한다.
+예를 들면 데이터버퍼캐시에 데이터가 없을때 디스크로 부터 읽어와야대는데 버퍼캐시에 공간이 없으면 LRU 알고리즘으로 디스크에 내려쓴후  디스크에서부터 가져온다.
+
+LGWR :
+리두로그 버퍼를 디스크에 기록한다.
+커밋하거나 로그스위치 등 여러가지 경우에 발생한다. 아주 바쁜녀석이다.
+
+ARCn :
+로그스위치가 발생할때 리두로그버퍼를 백업장치에 기록한다.
+
+CKPT : 체크포인트 프로세스
+체크포인트; 데이터버퍼캐시의 더티버퍼를 디스크에 내려써주는 이벤트
+SCN 넘버에 기록한다.
+풀체크포인트, 인크리멘털 체크포인트
+
+SMON : 시스템 모니터 프로세스
+갑자기 전원이 꺼져서 기록이 안되었다면 인스턴스 재실행시에
+리두로그파일과 데이터파일을 비교해서 recovery 수행
+MOUNT 단계에서 수행한다.
+Rolling forward : redo 로그를 수행, 커밋된건 커밋된대로 커밋안된건 커밋안된대로 데이터버퍼캐시를업데이트한다. 하지만 커밋안된놈을 롤백하지는않는다. 롤백하는데도 시간이 걸리고 그로인해 startup 시간이 지연되기때문이다.
+
+Rolling back : Open 후에 새로운 사용자들이(데이터버퍼캐시의)해당 블록 을 사용하고자 할때 롤백을 처리해준다.
+
+PMON : 
+유저 프로세스와 서버프로세스를 모니터링
+유저프로세스가 끊어졌다면 사용하던 리소스들을 제거한다.
+
+LREG : 리스너 등록 프로세스
+PMON 이 하던 일을 12g 부터 이 프로세스에 넘겼다.
+기본리스너가 아닌 다른 리스너한테 서비스 목록을 알려준다.
+
+
+데이터베이스 저장영역구조
+control file
+data file
+redo log file
+parameter file
+…
+
+논리적 저장영역단위
+block<extent<segment<테이블스페이스<데이터베이스
+
+Big파일 테이블스페이스 에는 데이터파일 한개만 허용된다.
+일반 테이블 스페이스는 데이터파일이 두개다.
+
+
+Oracle Database 관리툴
+
+SqlDeveloper
+view > DBA 메뉴 : connection 추가  sys/ oracle_4U   ( role : sysdba 체크)
+
+EM - 잘 사용안하는 툴
+enterprise manager database express ; 간단한 모니터링 툴로 쓴다. 공짜다. 
+oracle enterprise manager cloud control ; 기능이 많은데 너무 무겁다. 비싸다.
+
+sqlplus 환경 구성
+vi $ORACLE_HOME/sqlplus/admin/glogin.sql
+set sqlprompt "_USER'@'_CONNECT_IDENTIFIER>"
+set linesize 500
+set pagesize 200
+
+
+인스턴스 상태 보기
+SYS@orcl>select instance_name,status from v$instance;
+
+오라클 환경변수
+[oracle@edydr1p1 admin]$ env |grep ORACLE
+ORACLE_SID=orcl     ← 인스턴스 식별자
+ORACLE_BASE=/u01/app/oracle
+ORACLE_HOME=/u01/app/oracle/product/12.1.0/dbhome_1
+
+[oracle@edydr1p1 admin]$ . oraenv
+ORACLE_SID = [orcl] ? 
+The Oracle base remains unchanged with value /u01/app/oracle
+
+[oracle@edydr1p1 admin]$ vi /etc/oratab
+
+
+$ORACLE_BASE/oradata/orcl 아래는 아래와 같은 파일들이 있다.
+[oracle@edydr1p1 orcl]$ ll
+total 3237936
+-rw-r-----. 1 oracle oinstall   10043392 May 27 10:42 control01.ctl
+-rw-r-----. 1 oracle oinstall 1304174592 May 27 09:34 example01.dbf
+-rw-r-----. 1 oracle oinstall   52429312 May 27 10:42 redo01.log
+-rw-r-----. 1 oracle oinstall   52429312 May 27 09:34 redo02.log
+-rw-r-----. 1 oracle oinstall   52429312 May 27 09:34 redo03.log
+-rw-r-----. 1 oracle oinstall  754982912 May 27 10:40 sysaux01.dbf
+-rw-r-----. 1 oracle oinstall  838868992 May 27 10:40 system01.dbf
+-rw-r-----. 1 oracle oinstall  206577664 May 27 09:41 temp01.dbf
+-rw-r-----. 1 oracle oinstall  157294592 May 27 10:42 undotbs01.dbf
+-rw-r-----. 1 oracle oinstall    5251072 May 27 09:34 users01.dbf
+
+$ORACLE_BASE/diag  안에는 오라클에관련된 모든 진단정보를 모아놨다.
+/u01/app/oracle/diag/rdbms/orcl/orcl/trace/
+[oracle@edydr1p1 trace]$  트레이스 파일들이 있다.
+
+
+초기화 파라미터파일 ; 디비 구동 운영 설정값, 인스턴스가 시작할때 필요한 파일
+spfile
+서버 파라미터 파일,  파일명은 spfile{sid}.ora 
+이 파일은 create database 할때 자동으로 생성된다. 바이너리 파일이다.
+오라클데이터베이스를 통해서만 변경이 가능하다.
+디비 운영중에 변경이 가능 read and write
+pfile
+초기화 파라미터 파일, 파일명은 init{sid}.ora
+직접 편집이 가능하다. 오라클데이터베이스를 통해 변경이 안된다. 
+디비 운영중에 변경이 불가, read only
+
+
+spfile 이나 pfile 은 어떤걸 쓰나 상관없고 취향일뿐이다.
+하지만 싱글인스턴스환경이 아닌 RAC 등의 경우에는 spfile 로 관리하는게 편리하다.
+
+cd $ORACLE_HOME/dbs
+[oracle@edydr1p1 dbs]$ ll
+total 44
+-rw-rw----. 1 oracle oinstall 1544 May 27 09:34 hc_em12rep.dat
+-rw-rw----. 1 oracle oinstall 1544 May 27 09:34 hc_orcl.dat
+-rw-r--r--. 1 oracle oinstall 2992 Feb  3  2012 init.ora
+-rw-r-----. 1 oracle oinstall   24 Mar 10  2017 lkEM12REP
+-rw-r-----. 1 oracle oinstall   24 Mar 11  2017 lkORCL
+-rw-r-----. 1 oracle oinstall 7680 Mar 10  2017 orapwem12rep
+-rw-r-----  1 oracle oinstall 7680 Mar 14  2017 orapworcl
+-rw-r-----. 1 oracle oinstall 3584 May 27 10:42 spfileem12rep.ora
+-rw-r-----. 1 oracle oinstall 3584 May 27 09:50 spfileorcl.ora   ←- 초기화 파라미터 파일
+
+SYS@orcl>show parameter spfile
+-- spfile의 위치가 출력된다.
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+spfile				     string	 /u01/app/oracle/product/12.1.0
+						 /dbhome_1/dbs/spfileorcl.ora
+
+SYS@orcl>show parameter pool
+-- 파라미터안에 pool 이 들어간걸 다 검색한다.
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+buffer_pool_keep		     string
+buffer_pool_recycle		     string
+global_context_pool_size	     string
+java_pool_size			     big integer 0
+large_pool_size 		     big integer 0
+olap_page_pool_size		     big integer 0
+shared_pool_reserved_size	     big integer 6081740
+shared_pool_size		     big integer 0
+streams_pool_size		     big integer 8M
+
+
+또는 
+SQL> select * from v$parameter;  로 조회할수있다.
+SQL> select * from v$parameter where name='control_files';  -- 한줄로 나온다.
+SQL> select * from v$parameter2 where name='control_files'  -- 여러줄로 나온다. 보기편함
+
+
+SQL> select * from v$parameter where name='db_cache_size';
+SQL> select * from v$spparameter where name='db_cache_size';  -- spfile 의 파라미터
+결과는 null 이 나오는데 이건 오라클서버가 자동으로 관리하고있다는 뜻이다.
+
+SYS@orcl>show parameter target
+
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+archive_lag_target		     integer	 0
+db_big_table_cache_percent_target    string	 0
+db_flashback_retention_target	     integer	 1440
+fast_start_io_target		     integer	 0
+fast_start_mttr_target		     integer	 0
+memory_max_target		     big integer 0
+memory_target			     big integer 0
+parallel_servers_target 	     integer	 32
+pga_aggregate_target		     big integer 211M
+sga_target			     big integer 512M
+spfile 을 활용해서 pfile 을 만들기
+SYS@orcl>create pfile from spfile;
+File created.
+[oracle@edydr1p1 dbs]$ cd $ORACLE_HOME/dbs
+[oracle@edydr1p1 dbs]$ ls
+hc_em12rep.dat  init.ora      lkEM12REP  orapwem12rep  spfileem12rep.ora
+hc_orcl.dat     initorcl.ora  lkORCL     orapworcl     spfileorcl.ora
+
+파일두개를 백업한후 지우자. ( initorcl.ora  와  spfileorcl.ora )
+그리고 디비를 재시작해보자
+SYS@orcl>shutdown immediate
+Database closed.
+Database dismounted.
+ORACLE instance shut down.
+SYS@orcl>startup
+ORA-01078: failure in processing system parameters
+LRM-00109: could not open parameter file '/u01/app/oracle/product/12.1.0/dbhome_1/dbs/initorcl.ora'
+-- 오라클을 시작할수 없다는 에러가 나온다.
+initorcl.ora 를 복구한후 다시 startup 하면된다.
+그러면 위에서와는 달리 value 값이 비어있는것을 볼수있다.
+SYS@orcl>show parameter spfile
+
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+spfile				     string
+
+다시 spfile 을 사용하고싶다면
+SYS@orcl>create spfile from pfile;
+File created.
+다시 껐다켜면 spfile 을 사용해서 시작된것을 알수있다.
+이때 initorcl.ora 는 지워도 된다.
+SYS@orcl>show parameter spfile
+
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+spfile				     string	 /u01/app/oracle/product/12.1.0
+						 /dbhome_1/dbs/spfileorcl.ora
+
+
+$ORACLE_HOME/dbs 디렉토리안에 spfile, pfile 두개가 있다면 spfile 부터 찾는다.
+
+spfile , pfile 모두 없어지면 memory 에서 만들수있다.
+SYS@PROD1>create pfile from memory;
+File created.
+
+통계수집 레벨 statistics_level
+SYS@orcl>select value from v$parameter  where name='statistics_level';
+결과는 TYPICAL
+이값을 변경해보자
+SYS@orcl>ALTER SESSION SET STATISTICS_LEVEL = ALL;
+세션에만 적용되므로 해당 세션에서만 바뀐다.
+
+이렇게 운영중에 바로 바로 변경되는 파라미터를 dynamic parameter 라고 한다.
+그렇지 않은 파라미터를 static parameter 라고 한다.
+
+SYS@orcl>show parameter large_pool_size
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+large_pool_size 		     big integer 0
+
+사이즈를 변경해볼까나.. 그런데 에러가 나네.. 
+이건 세션레벨에서는 변경할수 없고 시스템 레벨에서만 변경이 가능하다.
+SYS@orcl>alter session set large_pool_size = 20M;
+alter session set large_pool_size = 20M
+                  *
+ERROR at line 1:
+ORA-02096: specified initialization parameter is not modifiable with this option
+
+SYS@orcl>alter system set large_pool_size=20M;
+System altered.
+변경이 완료되었다.
+
+프로세스 수를 변경해볼까?
+
+SYS@orcl>show parameter processes
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+aq_tm_processes 		     integer	 1
+db_writer_processes		     integer	 1
+gcs_server_processes		     integer	 0
+global_txn_processes		     integer	 1
+job_queue_processes		     integer	 1000
+log_archive_max_processes	     integer	 4
+processes			     integer	 300
+
+SYS@orcl>alter system set processes=200;
+alter system set processes=200                *
+ERROR at line 1:
+ORA-02095: specified initialization parameter cannot be modified
+이건 변경이 안되네.. 이게 static parameter 이다. 운영중에 변경이 안된다.
+
+alter session set … 세션레벨 파라미터 변경
+alter system set … 시스템 레벨 파라미터 변경
+
+SYS@orcl>alter system set processes = 200 scope=spfile;
+이렇게 하면 spfile 만 변경하겠다는 뜻. 다음 기동시에 반영되는것이므로 에러없이 수행된다.
+scope 의 옵션은 spfile, memory, both 가 있다.
+scope 을 지정하지 않으면 기본값은 both 이다.
+만약 spfile 로 구동하지 않은 경우 즉 pfile 로 구동한경우는 기본값은 memory 이다.
+
+SYS@orcl>select name,value from v$spparameter where name='processes';
+
+
+spfile 이 아닌 pfile 로 오라클을 구동해보자.
+SYS@orcl>startup pfile='$ORACLE_HOME/dbs/initorcl.ora';
+SYS@orcl>show parameter spfile;
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+spfile				     string
+
+pfile 로 구동된 경우 변경이 가능한 파라미터는 메모리만 변경하는 것들이다.
+SYS@orcl>alter system set processes = 200;  -- 이건 안된다.
+SYS@orcl>alter system set db_cache_size = 50M;  -- 바뀐다.
+SYS@orcl>show parameter db_cache_size;
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+db_cache_size			     big integer 52M
+
+껐다가 켜보면 값이 원래대로 돌아가있는걸 확인할수있다. 즉 메모리에만 변경이 되었단것임
+SYS@orcl>startup pfile='$ORACLE_HOME/dbs/initorcl.ora';
+SYS@orcl>show parameter db_cache_size
+
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+db_cache_size			     big integer 0
+
+alter log 를 보자.
+[oracle@edydr1p1 dbhome_1]$ cd $ORACLE_BASE/diag/rdbms/orcl/orcl/trace
+[oracle@edydr1p1 trace]$ tail -f alert_orcl.log 
+
+인스턴스의 단계 : shutdown -> nomount -> mount -> open
+인스턴스 확인
+SYS@orcl>select status from v$instance;
+
+
+SYS@orcl>startup nomount
+[oracle@edydr1p1 dbs]$ ps -ef|grep orcl     ← 백그라운드 프로세스 떠있다.
+SYS@orcl>select status from v$instance;
+STATUS
+------------
+STARTED
+
+nomount 단계 : SGA할당, 백그라운드 프로세스 생성 -> 인스턴스 시작
+	초기화 파라미터파일 $ORACLE_HOME/dbs/ 에서 찾는다. ( pfile, spfile )
+	pfile, spfile 모두 없으면 create pfile from memory 해서 pfile 을 생성할수잇다.
+	이때는 컨트롤 파일이 필요 없다.
+
+
+mount 단계 : 인스턴스와 데이터파일을 연결한다.
+DB 운영모드 변경
+아카이브 모드 등 변경(아카이브로그모드: 로그스위치가일어날때마다 백업을 남기는거)
+database recovery
+datafile 이름 변경 (이건 버전에 따라서 다르다, 12c 에선 온라인에서도가능 )
+
+nomount -> mount 로 가는 방법
+SYS@orcl>alter database mount;
+SYS@orcl>select status from v$instance;
+STATUS
+------------
+MOUNTED
+
+SQL>select dbid,name,log_mode,controlfile_type,controlfile_sequence#
+, controlfile_change#
+from v$database;
+
+SQL> select * from v$datafile;
+SQL> select * from v$logfile;
+
+SQL> conn hr/hr   ← 이거는 안된다.
+
+마운트만 되어있고 파일이 오픈은 안되어있는 상태이다
+
+마운트 단계에서도 할수있는것
+database 생성, datafile, control file, redolog file 생성
+
+
+mount -> open 으로 가는 방법
+이때 컨트롤 파일을 본다.
+컨트롤 파일이란? 디비에 대한 물리적 구성정보
+컨트롤 파일과 데이터 파일의 scn 의 일관성 체크해서 일치해야 오픈한다.
+
+SYS@orcl>alter database open;
+SYS@orcl>select status from v$instance;
+STATUS
+------------
+OPEN
+
+
+종료 Shutdown
+(모드)
+A = Abort
+I = Immediate
+T = Transaction
+N = Normal  (기본값)
+
+
+shutdown normal 로 하면 잘 안꺼진다.
+그러면 sysdba 로 들어가서 shutdown abort 해야한다.
+
+shutdown immediate 하면
+commit 안한것들은 rollback 된다.
+
+
+Alert_Log 에 기록되는 것들
+DB 의 운영모드가 변경
+DB 의 리커버리 작업이 진행되었다.
+내부(Internal) 에러 
+create database 등의 쿼리를 실행할때
+
+disanostic_dest => ADR HOME (automatic diagnostic repository)
+/u01/app/oracle/diag/rdbms/orcl/orcl/trace/
+*.trc , *.trm 파일이 있음
+-> 문제시 오라클에 보내주면된다.
+
+
+
+오라클 네트워크환경 구성
+Oracle Net Service
+[oracle@edydr1p1 trace]$ cd $ORACLE_HOME/network/admin
+listener.ora   ;   PMON, LREG
+tnsnames.ora
+
+
+listener 에게 서비스를 등록하는 방법은 두가지
+static registration : 
+dynamic registration : 
+
+다양한 접속방법
+
+sqplus / as sysdba (호스트인증, 디비서버안에 있을경우)
+sqlplus system/oracle_4U   ( 호스트 인증, 디비서버안에 있을경우 )
+
+sqlplus system/oracle_4U@orcl  ( 로컬 네이밍 )
+tnsnames.ora 만 설정이 되어있다면 가능
+
+sqlplus hr/hr@192.168.56.111:1521/orcl  ( EasyConnect, tcp/ip 만 지원 )
+고급연결은 지원안함 : 로드밸런싱, connect-time, fail over( Data Guard )
+
+
+[oracle@edydr1p1 em12rep]$ sqlplus / as sysdba
+SYS@orcl>select instance_name, status from v$instance;
+INSTANCE_NAME	 STATUS
+---------------- ------------
+orcl		 OPEN
+
+[oracle@edydr1p1 ~]$ sqlplus system/oracle_4U@em12rep
+SYSTEM@em12rep>select instance_name, status from v$instance;
+INSTANCE_NAME	 STATUS
+---------------- ------------
+em12rep 	 OPEN
+
+
+리스너 유틸리티
+[oracle@edydr1p1 admin]$ lsnrctl status   ← 리스너 상태 보기
+[oracle@edydr1p1 admin]$ lsnrctl stop  ← 리스너 스탑
+sqplus / as sysdba   -- 접속됨
+sqlplus system/oracle_4U  -- 접속됨 
+sqlplus system/oracle_4U@orcl  -- 접속안됨
+
+[oracle@edydr1p1 admin]$ lsnrctl start  ← 리스너 스타트
+sqlplus system/oracle_4U@orcl  -- 접속됨
+
+
+tnsnames.ora ; 접속하려는곳의  아이피, 포트, 프로토콜, 서비스아이디 등을 알수있다.
+
+
+Dedicated Server
+세션당 한개의 서버프로세스, 접속이 많아지면 로드가 커지는 문제점
+
+Shared Server 개념
+User -> 리스너 -> 디스패쳐 <-> SGA (request queue, response queue)
+UGA 가 large pool 에 생긴다.
+
+
+유저보안관리
+
+인증 - oS인증, Db 인증
+
+dbca 실행하면 database configuration assistance  가 뜬다.
+
+create database -> Advanced Mode -> General Purpose -> “PROD” 입력 ….-> Finish
+
+[oracle@edydr1p1 ~]$ . oraenv
+ORACLE_SID = [orcl] ? prod
+ORACLE_HOME = [/home/oracle] ? /u01/app/oracle/product/12.1.0/dbhome_1
+The Oracle base remains unchanged with value /u01/app/oracle
+
+[oracle@edydr1p1 ~]$ su -  ( 비밀번호는 oracle )
+[root@edydr1p1 ~]# useradd -g  oinstall kim
+[root@edydr1p1 ~]# passwd kim
+
+[kim@edydr1p1 ~]$ id
+uid=54329(kim) gid=54321(oinstall) groups=54321(oinstall)
+
+kim 으로 로그인해서 접속해보니 접속이 안되네
+[kim@edydr1p1 ~]$ sqlplus / as sysdba
+SQL*Plus: Release 12.1.0.2.0 Production on Fri May 29 10:43:56 2020
+Copyright (c) 1982, 2014, Oracle.  All rights reserved.
+ERROR:
+ORA-01017: invalid username/password; logon denied
+
+[root@edydr1p1 ~]# usermod -G oper kim
+
+[kim@edydr1p1 ~]$ sqlplus / as sysoper  
+접속이 되었다.
+이렇게 접속하는 방법이 OS 레벨에서 된것이다.
+
+usergroup 별로 권한을 준다.
+dba , oper, rac 등
+12c 에서는 bkpdba(백업) , dgdba (데이터가드)  가 추가되었다.
+
+sysoper 는 startup, shutdown 정도 할수있다.
+
+
+SQL> select name, password from user$
+유저와 비번출력, 비번은 암호화됨
+
+
+비밀번호 파일
+$ORACLE_HOME/dbs/orapw{sid}
+
+디비가 죽어도 비번을 통해 접속이 된다.
+[oracle@edydr1p1 ~]$ sqlplus sys/oracle_4U as sysdba
+
+
+데이터베이스 삭제했는데도 prod 가 살아있네
+
+
+테이블 스페이스 
+SYS@orcl>select file_name,tablespace_name , bytes/1024/1024 as MB from dba_data_files;
+
+FILE_NAME					   TABLESPACE	      MB
+-------------------------------------------------- ---------- ----------
+/u01/app/oracle/oradata/orcl/system01.dbf	   SYSTEM	     800
+/u01/app/oracle/oradata/orcl/sysaux01.dbf	   SYSAUX	     740
+/u01/app/oracle/oradata/orcl/example01.dbf	   EXAMPLE	 1243.75
+/u01/app/oracle/oradata/orcl/users01.dbf	   USERS	       5
+/u01/app/oracle/oradata/orcl/undotbs01.dbf	   UNDOTBS1	     150
+
+
+테이블 스페이스 만들어보기
+SYS@orcl>create tablespace test datafile '$ORACLE_BASE/oradata/orcl/test01.dbf' size 5M;
+
+유저 생성
+create user ora01 
+	identified by new 
+	profile default    
+	default tablespace test
+	temporary tablespace temp  -- sorting 등의 작업을 할때 활용되는 영역
+	account lock -- 잠겨있도록 설정
+	password expire;  -- 비밀번호 변경하도록 한다
+
+SYS@orcl>alter user ora01 account unlock;
+
+[oracle@edydr1p1 dbs]$ sqlplus ora01/new
+
+SQL*Plus: Release 12.1.0.2.0 Production on Mon Jun 1 11:03:09 2020
+
+Copyright (c) 1982, 2014, Oracle.  All rights reserved.
+
+ERROR:
+ORA-28001: the password has expired
+
+
+Changing password for ora01
+New password: 
+Retype new password: 
+ERROR:
+ORA-01045: user ORA01 lacks CREATE SESSION privilege; logon denied
+
+권한을 준다.
+SYS@orcl>grant connect, resource to ora01;
+유저 정보를 확인한다.
+SYS@orcl>select * from dba_users where username='ORA01';
+
+현재 세션이 가진 권한을 확인해본다.
+ORA01@orcl>select * from session_privs;
+
+PRIVILEGE
+----------------------------------------
+SET CONTAINER
+CREATE INDEXTYPE
+CREATE OPERATOR
+CREATE TYPE
+CREATE TRIGGER
+CREATE PROCEDURE
+CREATE SEQUENCE
+CREATE CLUSTER
+CREATE TABLE
+CREATE SESSION
+
+
+테이블을 만들고 insert 해보면 에러가난다.
+ORA01@orcl>create table t1 ( col1 number, col2 varchar2(10));
+Table created.
+ORA01@orcl>insert into t1 values ( 123,'abc');
+insert into t1 values ( 123,'abc')
+            *
+ERROR at line 1:
+ORA-01950: no privileges on tablespace 'TEST'
+
+권한을 주자.
+SYS@orcl>grant unlimited tablespace to ora01;                    
+Grant succeeded.
+
+
+
+ORA01@orcl>insert into t1 values ( 123,'abc');
+1 row created.
+
+권한을 다시 뺐자.
+SYS@orcl>revoke unlimited tablespace from ora01;
+Revoke succeeded.
+
+헉!.. 권한을 뺐았는데도 들어가지네...
+ORA01@orcl>insert into t1 values (456,'def');
+1 row created.
+
+하지만 새로운 테이블을 만들어 insert 하면 에러난다.
+ORA01@orcl>create table t2 (col1 number, col2 varchar2(10));
+
+Table created.
+
+Elapsed: 00:00:00.01
+ORA01@orcl>insert into t2 values (123,'abc');
+insert into t2 values (123,'abc')
+            *
+ERROR at line 1:
+ORA-01950: no privileges on tablespace 'TEST'
+
+
+테이블스페이스에 공간을 할당해주는 시점은 create 때가 아니라 첫번째 insert 가 일어날때이다. ( 오라클 특정버전 이후부터 )
+한번 할당된 테이블스페이스는 계속 사용이 가능하다.
+
+
+HR@orcl>select * from user_sys_privs;
+HR@orcl>select * from session_privs;
+
+with admin 옵션,  with grant 옵션
+
+
+프로파일
+user 에게 할당되는 설정
+
+test 테이블 스페이스 제거 ( 테이블 스페이스 안에 내용도 지우자 )
+SYS@orcl>drop tablespace test including contents and datafiles;
+Tablespace dropped.
+
+테이블 스페이스 새로 만들기
+SYS@orcl>create tablespace test datafile '$ORACLE_BASE/oradata/orcl/TEST01.dbf' size 10M;
+Tablespace created.
+
+유저 생성
+SYS@orcl> create user ora01
+	identified by oracle_4U
+	default tablespace test
+	temporary tablespace temp
+	account unlock;
+
+권한도 주자. (role)
+SYS@orcl>grant resource , connect to ora01;
+Grant succeeded.
+
+확인
+SYS@orcl>select * from dba_users where username='ORA01'
+
+프로파일 딕셔너리뷰
+SYS@orcl>desc dba_profiles;
+Name          Null     Type          
+------------- -------- ------------- 
+PROFILE       NOT NULL VARCHAR2(128) 
+RESOURCE_NAME NOT NULL VARCHAR2(32)  
+RESOURCE_TYPE          VARCHAR2(8)   
+LIMIT                  VARCHAR2(128) 
+COMMON                 VARCHAR2(3)   
+
+디폴트 프로파일에는 뭐가 들어있나?
+SYS@orcl>select * from dba_profiles where profile='DEFAULT'
+SESSIONS_PER_USER : 접속인원수
+CPU_PER_SESSION : 한세션이 사용할수있는 시간
+
+연결시간관련 테스트를 위한 프로파일 생성
+SYS@orcl>drop profile conn_t;
+SYS@orcl>create profile conn_t limit
+	CPU_PER_SESSION UNLIMITED
+	CPU_PER_CALL UNLIMITED
+	LOGICAL_READS_PER_SESSION DEFAULT
+	CONNECT_TIME  5; -- 커넥트 타임을 5분으로 지정
+
+SYS@orcl>select * from dba_profiles where profile='CONN_T'
+ora01 유저에게 어떤 프로파일이 적용되어있는지 확인
+SYS@orcl>select username,profile from dba_users where username='ORA01';
+SYS@orcl>alter user ora01 profile conn_t;
+User altered.
+
+
+참고로 5분제한을 주기위한 더 상위 조건은 RESOURCE_LIMIT 이 true 어야 한다.
+SYS@orcl>show parameter resource_limit;
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+resource_limit			     boolean	 TRUE
+
+
+그리고 ora01 로 접속해서 테스트, 5분동안 켜둔후에 접속이 끊어지는지 체크
+ORA01@orcl>select 1 from dual;
+select 1 from dual
+              *
+ERROR at line 1:
+ORA-02399: exceeded maximum connect time, you are being logged off
+
+
+접속후 20분간, 사용안한시간5분이면 끊어지게 프로파일 작성
+SYS@orcl>create profile idle_t limit
+	CPU_PER_SESSION UNLIMITED
+	CPU_PER_CALL UNLIMITED
+	LOGICAL_READS_PER_SESSION DEFAULT
+	CONNECT_TIME  20
+	IDLE_TIME  5;
+SYS@orcl>select * from dba_profiles where profile='IDLE_T';
+
+ora01 에 적용되어있던 프로파일 삭제하기, 지우면 default 로 변경이된다.
+SYS@orcl>drop profile conn_t cascade;
+SYS@orcl>select profile from dba_users where username='ORA01';
+PROFILE
+----------
+DEFAULT
+
+새로운 프로파일 idle_t 로 적용하자.
+SYS@orcl>alter user ora01 profile idle_t;
+User altered.
+SYS@orcl>select profile from dba_users where username='ORA01';
+PROFILE
+----------
+IDLE_T
+
+SYS@orcl>select username, status from v$session where username='ORA01';
+USERNAME		       STATUS
+------------------------------ --------
+ORA01			       INACTIVE
+
+
+5분 지나니깐 상태가 이렇게 바뀌네..  INACTIVE -> SNIPED
+SYS@orcl>select username, status from v$session where username='ORA01';
+
+USERNAME		       STATUS
+------------------------------ --------
+ORA01			       SNIPED
+
+
+접속시간 20분, 휴먼시간5분, 접속실패 10회
+create profile fla_t limit
+	CPU_PER_SESSION UNLIMITED
+	CPU_PER_CALL UNLIMITED
+	LOGICAL_READS_PER_SESSION DEFAULT
+	CONNECT_TIME  20
+	IDLE_TIME  5
+	FAILED_LOGIN_ATTEMPTS 10;
+SYS@orcl>alter user ora01 profile fla_t;
+User altered.
+
+로그인 비번 10번 틀리면 아래와 같이 잠긴다.
+[oracle@edydr1p1 ~]$ sqlplus ora01/oracle
+
+SQL*Plus: Release 12.1.0.2.0 Production on Tue Jun 2 10:58:19 2020
+
+Copyright (c) 1982, 2014, Oracle.  All rights reserved.
+
+ERROR:
+ORA-28000: the account is locked
+
+select account_status from dba_users where username='ORA01';
+
+확인해보면 잠겨있는걸 확인할수있다.
+SYS@orcl>select account_status from dba_users where username='ORA01';
+ACCOUNT_STATUS
+--------------------------------
+LOCKED(TIMED)
+
+
+풀자.
+SYS@orcl>alter user ora01 account unlock;
+User altered.
+
+ora01 프로파일을 default 로 만들자.
+SYS@orcl>alter user ora01 profile default;
+User altered.
+
+# PASSWORD_LIFE_TIME : 동일한 암호를 사용기간 설정 파라미터
+
+# PASSWORD_LOCK_TIME : FAILED_LOGIN_ATTEMPTS 를 통해 잠긴 게정을 몇일동안 LOCK 할지 
+
+# PASSWORD_GRACE_TIME ; PASSWORD LIFE TIME 이 만료되어도 PASSWORD GRACE TIME 에 지정된 만큼 변경할 기간을 허용함
+
+
+
+테이블 스페이스 
+SYS@orcl>create tablespace tbs01 
+datafile '$ORACLE_BASE/oradata/orcl/tbs01.dbf' 
+size 5M;
+Tablespace created.
+
+TODO : bigfile space , small file space 비교…
+가장큰 차이점은 빅파일 스페이스는 테이블스페이스가 하나여야 한다.
+
+-- smallfile 테이블 스페이스 ( 디폴트는 smallfile 이다 )
+create smallfile tablespace tbs02
+datafile '$ORACLE_BASE/oradata/orcl/tbs02.dbf' 
+size 5M
+autoextend on next 1M maxsize 7M
+extent management local uniform size 1M
+segment space management auto
+nologging;
+
+
+-- bigfile 테이블 스페이스
+create bigfile tablespace tbs03
+datafile '$ORACLE_BASE/oradata/orcl/tbs03.dbf' 
+size 10M
+
+-- 블록사이즈 16K 로 만들어보자. ( 기본은 8k )
+create smallfile tablespace tbs04
+datafile '$ORACLE_BASE/oradata/orcl/tbs04.dbf' 
+size 10M
+blocksize 16k;
+결과는 아래와 같다.
+ORA-29339: tablespace block size 16384 does not match configured block sizes
+이유는 데이터 버퍼캐시도 16k 로 만들놔야한다.
+SYS@orcl>alter system set db_16k_cache_size = 16M;
+System altered.
+SYS@orcl>show parameter cache_size
+
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+client_result_cache_size	     big integer 0
+db_16k_cache_size		     big integer 16M
+db_2k_cache_size		     big integer 0
+db_32k_cache_size		     big integer 0
+db_4k_cache_size		     big integer 0
+db_8k_cache_size		     big integer 0
+db_cache_size			     big integer 0
+db_flash_cache_size		     big integer 0
+db_keep_cache_size		     big integer 0
+db_recycle_cache_size		     big integer 0
+
+그런다음에 테이블스페이스를 생성하면 성공
+
+
+테이블스페이스의 종류는 아래와 같다. 그동안 우리가 만든건 PERMANENT
+SYS@orcl>select distinct contents from dba_tablespaces;
+
+CONTENTS
+---------
+PERMANENT
+UNDO
+TEMPORARY
+
+UNDO 는 트랜잭션의 이전버전을 관리하는 테이블스페이스다.
+
+그러면 UNDO 형식의 테이블 스페이스를 만들어보자.
+create undo tablespace undotbs2
+	datafile '$ORACLE_BASE/oradata/orcl/undotbs2.dbf'
+	size 5M;
+
+temporary 테이블 스페이스도 만들어보자.
+create temporary tablespace temp1
+	tempfile '$ORACLE_BASE/oradata/orcl/temp1.dbf'
+	size 5M
+	autoextend on
+	tablespace group temp_group;
+
+create temporary tablespace temp2
+	tempfile '$ORACLE_BASE/oradata/orcl/temp2.dbf'
+	size 5M
+	autoextend on
+	tablespace group temp_group;
+
+temp_group 이 궁금하네…
+SYS@orcl>select * from dba_tablespace_groups;
+GROUP_NAME		       TABLESPACE_NAME
+------------------------------ ------------------------------
+TEMP_GROUP		       TEMP1
+TEMP_GROUP		       TEMP2
+
+SYS@orcl>create table prod1 (id number) tablespace tbs01;
+Table created.
+
+tbs01 테이블스페이스를 지워보자.. 안지워지네.. 테이블이 연결되어있어서 그렇구나.
+SYS@orcl>drop tablespace tbs01;
+drop tablespace tbs01
+*
+ERROR at line 1:
+ORA-01549: tablespace not empty, use INCLUDING CONTENTS option
+
+이렇게 하면 테이블 삭제가 가능하다.
+SYS@orcl>drop tablespace tbs01 including contents;
+Tablespace dropped.
+
+하지만 tbs01.dbf 파일은 그대로 남아있네.. 이것도 같이 지우려면…
+
+
+SYS@orcl>create table prod1 ( id number) tablespace tbs02;
+Table created.
+
+여유공간이있는지 체크
+SYS@orcl>select * from dba_free_space where tablespace_name='TBS02'
+
+데이터를 잔뜩 넣어서 공간이 없다면
+SYS@orcl>insert into prod1 select level from dual connect by level<=100000;
+insert into prod1 select level from dual connect by level<=100000
+*
+ERROR at line 1:
+ORA-01653: unable to extend table SYS.PROD1 by 128 in tablespace TBS02
+
+-- 1. 데이터 파일을 추가
+SYS@orcl>alter tablespace tbs02 add datafile '$ORACLE_BASE/oradata/orcl/tbs02_1.dbf' size 5M
+-- 2. 기존공간을 늘려준다. resize
+SYS@orcl>alter database datafile '$ORACLE_BASE/oradata/orcl/tbs02.dbf' resize 10M;
+Database altered.
+-- 3. 아예 자동으로 데이터 파일을 증가시켜주도록 설정
+SYS@orcl>alter database datafile '$ORACLE_BASE/oradata/orcl/tbs02.dbf' autoextend on next 10M maxsize 100M;
+Database altered.
+
+SYS@orcl>select file_id,file_name,tablespace_name, bytes/1024/1024 MB, blocks, autoextensible
+from dba_data_files where tablespace_name='TBS02';
+
+mount 단계에서는 datafile 이름 변경이 가능했었다.
+물론 12c 부터는 online 상태에서도 변경이 가능하다.
+
+디렉토리위치 변경
+SYS@orcl>alter database move datafile '$ORACLE_BASE/oradata/orcl/tbs02.dbf' to '$ORACLE_BASE/oradata/orcl/sub_b/tbs02.dbf';
+Database altered.
+
+SYS@orcl>select * from dba_data_files where tablespace_name in ('TBS02');
+
+DB_BLOCK_SIZE
+default value : 8192 ,  range 2048 ~32768 (2kb~32kb)
+small file tablespace 경우 : 8k => 32TB , 32k => 128 TB 까지 사용가능
+big file tablespace 경우 : 8k => 32TB , 32k => 128 TB 까지 사용가능 (동일)
+
+> 스몰파일스페이스는 여러개의 파일을 나눠서 쓴다.
+32TB 하나 사서 쓰면 편하지 않을까? 하지만
+디스크 비용 
+많은 사용자 => 병합 이슈
+작은 용량의 디스크를 여러개사서 분산해서 사용하는게 좋다.
+
+> 빅파일 스페이스는 데이터 파일 한개만 허용한다.
+10g 부터 나온개념이다.( ASM 이란 기술이 나오면서 )
+ASM ; 분산처리 ( 미러링, 스트라이핑, 레이드 ..)
+
+create table 후에 최초 insert 시에 공간할당을 받는다.
+공간할당을 받는 최소단위는 extent
+디스크가 달라도 그걸 합쳐서 테이블스페이스 개념으로 묶으면 편리하게 접근할수있다.
+테이블 스페이스는 여러개의 데이터파일의 집합이다. 당연히 여러개의 디스크에 걸쳐있을수있다. 
+왜 테이블 스페이스를 쓰는가? 관리의 용이성 때문
+테이블스페이스>세그먼트>익스텐트>데이터블록
+
+
+테이블스페이스의 종류
+Permanent : 일반적으로 사용하는 공간
+Temporary : 소팅, 플랜 등의 작업을 위한 스페이스
+Undo : 변경사항을 적어놓은공간
+
+Default 스페이스로 지정한다는 의미 : system 테이블 스페이스가 디폴트이면 안좋으니까
+
+Extent Size : automatic (오라클이 알아서 공간확장), uniform 
+Logging : DML 시 로깅을 남길지
+
+segment space management 
+
+
+
+공간관리
+
+HWM : High Water Mark , 데이터가 가장많이 차있던 위치, 데이터를 스캔할때 무조건 여기까지 스캔한데, 데이터를 지워도 여기까지 스캔한데
+이런걸 줄여보는게 shrink 이다.
+
+
+테이블 스페이스 > 세그먼트 > 익스텐트 > 블록
+세그먼트 : 저장공간을 필요한
+
+테이블 스페이스를( 공간자동할당 ) 만들고 유저를 생성하여 연결
+SYS@orcl>drop tablespace test including contents and datafiles;
+SYS@orcl>create tablespace test datafile '$ORACLE_BASE/oradata/orcl/test01.dbf' 
+size 5M extent management local autoallocate;
+
+SYS@orcl>drop user ora01 cascade;
+SYS@orcl>create user ora01 identified by ora01 default tablespace test temporary tablespace temp account unlock;
+SYS@orcl>grant resource, connect to ora01;
+-- create table 후에 insert 하면 권한이 없다고 나오는데 그걸 해결하려면 아래와같이
+SYS@orcl>grant unlimited tablespace to ora01;
+
+--어떤 롤을 부여받았는지
+ORA01@orcl>select * from session_roles;
+
+롤에 포함된 system privileges
+ORA01@orcl>select * from role_sys_privs;
+
+--ora01 로 접속한 세션에 부여된 권한
+ORA01@orcl>select * from session_privs;
+
+-- 사용자가 부여받은 시스템 권한은 
+ORA01@orcl>select * from user_sys_privs;
+
+-- 유저 정보 ( 테이블스페이스 관련 )
+ORA01@orcl>select username,default_tablespace,temporary_tablespace from user_users;
+
+
+
+
+
+
+테이블 스페이스 테스트
+
+ORA01@orcl>create table t1 ( col1 number ) tablespace test;
+-- 방금 만든 테이블에 대한 공간할당을 확인해보자. 근데 아무값도 안나오네
+SYS@orcl>select * from dba_segments where tablespace_name='TEST';
+no rows selected
+
+
+-- 세그먼트는 deferred 하게 만들어진다. 즉 create 가 아니고 최초 insert 시에 할당된다.
+ORA01@orcl>insert into t1 values ( 1 );
+SYS@orcl>select segment_name,segment_type from dba_segments where tablespace_name='TEST';
+SEGMENT_NA SEGMENT_TY
+---------- ----------
+T1	   TABLE
+
+-- 테이블 스페이스 정보 확인
+SYS@orcl>select tablespace_name, status, contents, segment_space_management, allocation_type, block_size
+from dba_tablespaces where tablespace_name='TEST'  ;
+
+TABLESPACE_NAME 	       STATUS	 CONTENTS  SEGMEN ALLOCATIO BLOCK_SIZE
+------------------------------ --------- --------- ------ --------- ----------
+TEST			       ONLINE	 PERMANENT AUTO   SYSTEM	  8192
+
+-- 데이터 파일 정보
+SYS@orcl>select file_id,file_name, tablespace_name, bytes/1023/1023 as MB, autoextensible
+from dba_data_files  where tablespace_name='TEST' ;
+
+
+-- 템프 테이블스페이스 정보확인
+SYS@orcl>select file_id,file_name,tablespace_name, bytes/1024/1024 MB from dba_temp_files;
+
+-- 아까 만든 t1 테이블연관 세그먼트 정보 확인
+SYS@orcl>select segment_name,segment_type, tablespace_name,header_file, header_block, bytes, extents 
+from dba_segments 
+where segment_name='T1';  
+
+SEGMENT_NA SEGMENT_TY TABLESPACE_NAME	   HEADER_FILE HEADER_BLOCK	 BYTES	  EXTENTS
+---------- ---------- -------------------- ----------- ------------ ---------- ----------
+T1	   TABLE      TEST			     2		130	 65536		1
+
+-- 익스텐트(extent) 에 블록이 어떻게 할당되어있는지 확인
+( 테이블 스페이스 > 세그먼트 > 익스텐트 > 블록 )
+SYS@orcl>select segment_name,extent_id,file_id, block_id,tablespace_name, bytes, blocks
+from dba_extents 
+where segment_name='T1' ;
+
+SEGMENT_NA  EXTENT_ID  FILE_ID	 BLOCK_ID TABLESPACE_NAME	    BYTES     BLOCKS
+---------- ---------- -------- ---------- -------------------- ---------- ----------
+T1		    0	     2	      128 TEST			    65536	   8
+
+-- 데이터를 이제부터 많이 입력해보자.
+ORA01@orcl>insert into t1 select object_id from all_objects where rownum<=4500;
+ORA01@orcl>commit;
+
+-- extents 확인해보니  두개가 할당이된것을 볼수있다.
+SYS@orcl>select segment_name,extent_id,file_id, block_id,tablespace_name, bytes, blocks
+from dba_extents 
+where segment_name='T1' ;
+
+SEGMENT_NA  EXTENT_ID  FILE_ID	 BLOCK_ID TABLESPACE_NAME	    BYTES     BLOCKS
+---------- ---------- -------- ---------- -------------------- ---------- ----------
+T1		    0	     2	      128 TEST			    65536	   8
+T1		    1	     2	      136 TEST			    65536	   8
+
+-- 계속 넣다보면
+ORA01@orcl>insert into t1 select object_id from all_objects where rownum<=50000;
+ORA01@orcl>commit;
+SEGMENT_NA  EXTENT_ID  FILE_ID	 BLOCK_ID TABLESPACE_NAME	    BYTES     BLOCKS
+---------- ---------- -------- ---------- -------------------- ---------- ----------
+T1		    0	     2	      128 TEST			    65536	   8
+T1		    1	     2	      136 TEST			    65536	   8
+T1		    2	     2	      144 TEST			    65536	   8
+T1		    3	     2	      152 TEST			    65536	   8
+T1		    4	     2	      160 TEST			    65536	   8
+T1		    5	     2	      168 TEST			    65536	   8
+T1		    6	     2	      176 TEST			    65536	   8
+T1		    7	     2	      184 TEST			    65536	   8
+T1		    8	     2	      192 TEST			    65536	   8
+T1		    9	     2	      200 TEST			    65536	   8
+T1		   10	     2	      208 TEST			    65536	   8
+T1		   11	     2	      216 TEST			    65536	   8
+T1		   12	     2	      224 TEST			    65536	   8
+T1		   13	     2	      232 TEST			    65536	   8
+T1		   14	     2	      240 TEST			    65536	   8
+T1		   15	     2	      248 TEST			    65536	   8
+T1		   16	     2	      256 TEST			  1048576	 128
+
+17번째 부터 128 블록이 할당됨을 볼수있다.
+자꾸 공간을 달라고 하니 오라클이 크게 주기 시작하는거네..
+근데 이렇게 되면 단편화( fragment ) 문제가 발생할수있다. auto allocate 의 문제점
+
+-- 이때의 세그먼트 정보 확인
+SYS@orcl>select segment_name,segment_type, tablespace_name,header_file, header_block,bytes,extents
+from dba_segments where segment_name='T1';
+
+SEGMENT_NA SEGMENT_TY TABLESPACE_NAME	   HEADER_FILE HEADER_BLOCK	 BYTES	  EXTENTS
+---------- ---------- -------------------- ----------- ------------ ---------- ----------
+T1	   TABLE      TEST			     2		130    2097152	       17
+
+
+
+테이블 스페이스 ( 유니폼 ) 테스트
+
+SYS@orcl>drop tablespace test1 including contents and datafiles;
+SYS@orcl>create tablespace test1 datafile '$ORACLE_BASE/oradata/orcl/test1.dbf' 
+size 5M extent management local uniform size 1M;
+
+SYS@orcl>drop user ora01 cascade;
+SYS@orcl>create user ora01 identified by ora01 default tablespace test1 temporary tablespace temp account unlock;
+SYS@orcl>grant resource, connect to ora01;
+SYS@orcl>grant unlimited tablespace to ora01;
+
+SYS@orcl>select segment_name,segment_type, tablespace_name,header_file, header_block, bytes, extents 
+from dba_segments 
+where tablespace_name='TEST1'; 
+TABLESPACE_NAME      STATUS    CONTENTS  SEGMEN ALLOCATIO BLOCK_SIZE
+-------------------- --------- --------- ------ --------- ----------
+TEST1		     ONLINE    PERMANENT AUTO	UNIFORM 	8192
+
+
+SYS@orcl>select tablespace_name, status, contents, segment_space_management, allocation_type, block_size
+from dba_tablespaces where tablespace_name='TEST1';
+
+SYS@orcl>select file_id,file_name, tablespace_name, bytes/1023/1023 as MB, autoextensible
+from dba_data_files where tablespace_name='TEST1';
+
+ FILE_ID FILE_NAME			TABLESPACE_NAME 	    MB AUT
+-------- ------------------------------ -------------------- --------- ---
+      13 /u01/app/oracle/oradata/orcl/t TEST1			     5 NO
+	 est1.dbf
+
+SYS@orcl>select segment_name,segment_type, tablespace_name,header_file, header_block, bytes, extents 
+from dba_segments 
+where segment_name='T2';
+SEGMENT_NA SEGMENT_TY TABLESPACE_NAME	   HEADER_FILE HEADER_BLOCK	 BYTES	  EXTENTS
+---------- ---------- -------------------- ----------- ------------ ---------- ----------
+T2	   TABLE      TEST1			    13		131    1048576		1
+-- 1048576/1024/1024 = 1MB
+
+SYS@orcl>select segment_name,extent_id,file_id, block_id,tablespace_name, bytes, blocks
+from dba_extents 
+where segment_name='T2';
+SEGMENT_NA  EXTENT_ID  FILE_ID	 BLOCK_ID TABLESPACE_NAME	    BYTES     BLOCKS
+---------- ---------- -------- ---------- -------------------- ---------- ----------
+T2		    0	    13	      128 TEST1 		  1048576	 128
+
+
+auto allocate 시에는 8부터 시작하다가 17번째부터 128 이었는데 ,
+첨부터 128 블록 으로 시작하네 => uniform 의 특징
+
+
+
+왜 extent 단위로 처리하는가
+extent 는 연속중인 블록..
+파라미터중에 multiblock read count  라는게 있는데 연속된 블록을 한번에 읽을수있는게있다.
+
+pctfree
+업데이트 발생할정도의 공간을 남겨놓자.
+그렇지 않으면 다른 블록을 써야하니깐
+
+dictionaly managed tablespace : 과거와의 호환성을 위한 방식, 현재는 사용안함
+locally managed tablespace
+	Manual segment space management : PctFree, PctUsed
+		pctused 공간이하로 내려갈때 사용가능한 세그먼트
+	Automatic segment space management : bitmap block, PctFree
+	
+MSSM -> ASSM  더 진보된 방식
+
+
+행체인화(row-chaining) 및 이전(migration)
+
+한개의 row 가 10k 인데 8k 블록에 넣을려고 한다면 row-chaning 이 발생한다.
+row 가 업데이트될때 공간이 부족하여 다른 블록으로 이동시키는게 migration 이다.
+
+Deferred_segment_creation = true 일때 create table 시에 바로 할당이 안되고 최초 insert 시에 segment 가 만들어진다.
+SYS@orcl>show parameter deferred_segment_creation 
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+deferred_segment_creation	     boolean	 TRUE
+
+
+변경해보자. 그러면 create table 과 동시에 테이블공간을 할당받는다.
+ORA01@orcl>alter session set deferred_segment_creation = false;
+Session altered.
+ORA01@orcl>create table t9(col1 number) tablespace rtest;
+
+SYS@orcl>select segment_name,segment_type,tablespace_name from dba_segments where tablespace_name='RTEST';
+
+
+
+
+Resumable Tablespace 테스트
+insert 하다가 공간부족할때 공간을 늘려주면 마져 들어가는 방법
+SYS@orcl>create tablespace rtest datafile '$ORACLE_BASE/oradata/orcl/rtest.dbf' size 500k
+extent management local autoallocate; 
+
+Tablespace created.
+
+Elapsed: 00:00:00.13
+SYS@orcl>select tablespace_name, bytes from dba_free_space
+where tablespace_name='RTEST';
+TABLESPACE_NAME 		    BYTES
+------------------------------ ----------
+RTEST				   458752
+
+
+Alert Log 모니터링 하기
+[oracle@edydr1p1 dbhome_1]$ cd $ORACLE_BASE/diag/rdbms/orcl/orcl/trace
+[oracle@edydr1p1 trace]$ tail -f alert_orcl.log 
+
+ora01 사용자로 테이블을 rtest 테이블스페이스에 만든다.
+ORA01@orcl>create table remp (id number) tablespace rtest;
+ORA01@orcl>insert into remp select object_id from all_objects; -- 에러를 발생시킨다.
+insert into remp select object_id from all_objects
+                                                 *
+ERROR at line 1:
+ORA-01653: unable to extend table ORA01.REMP by 8 in tablespace RTEST
+
+이때 alert log 를 보자
+Thu Jun 11 13:55:27 2020
+ORA-1653: unable to extend table ORA01.REMP by 8 in tablespace RTEST 
+
+
+그렇다면 resumable tablespace 를 활용해보자.
+ORA01@orcl>alter session enable resumable timeout 100; 
+ERROR:
+ORA-01031: insufficient privileges
+
+
+안되네.. 그럼 권한을 주자.
+SYS@orcl>grant resumable to ora01;
+
+이번엔 성공
+ORA01@orcl>alter session enable resumable timeout 100; -- 100초로 설정
+Session altered.
+
+
+이제 다시 왕창 넣어보자. 
+ORA01@orcl>insert into remp select object_id from all_objects;
+대기 상태… 이때 alert log 를 보자. 그리고 그냥 100초 지날때까지 기다리자.
+
+
+alert log
+Thu Jun 11 13:59:31 2020
+statement in resumable session 'User ORA01(127), Session 18, Instance 1' was suspended due to
+    ORA-01653: unable to extend table ORA01.REMP by 8 in tablespace RTEST
+
+100초가 지나버리면  
+
+Thu Jun 11 14:01:13 2020
+statement in resumable session 'User ORA01(127), Session 18, Instance 1' was timed out
+
+
+이젠 다시 넣고 에러나면 공간을 늘려보자.
+SYS@orcl>alter tablespace rtest add datafile '$ORACLE_BASE/oradata/orcl/rtest2.dbf' size 1M;
+Tablespace altered.
+
+이때 alert log  보면
+Thu Jun 11 14:03:15 2020
+statement in resumable session 'User ORA01(127), Session 18, Instance 1' was resumed
+
+
+세그먼트 축소 ; HWM ( High water mark )
+alter table employees shrink space compact;  -- 압축
+alter table employees shrink space; -- hwm 이동, 이때는 dml 작업이 차단된다.
+( mysql 의 optimize table 같은거네 )
+
+LOCK
+v$locked_object
+
+# ASM ( Automatic Storage Management )
+컨트롤, 리두로그 파일은 다중화 하나 데이터파일은 다중화 하지 않지
+근데 데이터파일도 하드웨어적으로 다중화 할수있는게 미러링이다.
+RAID 를 쓰기도 하고 
+
+Clusterware, ASM => Grid Infrastructure ( GI )
+bigfile tablespace 최대 128TB 까지 쓸수있다. 이것이 가능한 이유는 ASM 기술 때문이다.
+
+11gR2 버전이후부터는 Grid 를 깔아줘야 ASM 을 사용할수있다.
+
+
+분산처리 ( 미러링, 스트라이핑, 레이드 ..)
+Raid0 : 스트라이핑 (처리량을 높인다 )
+Raid1 : 미러링 ( 안정성을 높인다 )
+Raid10 : 미러링과 스트라이핑이 동시에 ( 처리량과 안정성을 높이지만 비용증가 )
+	Raid1 두개를 Raid0 으로 묶는다.
+
+allocation unit (AU) 로 구성
+10g : 1M, 128k 가 기본값
+11g : 1M
+
+디스크를 추가하면 리밸런싱한다.
+AU 의 기본사이즈는 언제 결정하나? 그룹이 생성될때,  그리고 운영중엔 변경하지 못한다.
+
+Diskgroup : asm 에서 디스크를 가상화 해놓은것 
++DATA
++FRA
+orcl, prod => asm instance => +DATA, +FRA 
+disk group 에서는 여러개의 인스턴스를 관리할수있다.
+
+디스크그룹중 FailGroup
+External, Normal(2중화), High(3중화)
+Normal Redundancy
+primary extent, secondary extent 가 각각의 failgroup 에 존재한다.
+Disk가 Corrupt 가 생기면 AU 단위로 재배치된다.
+
+기존의 사용하던 방식을 asm 으로 변환하려면 RMAN 을 사용한다.
+
+ASM Instance , Extent Map .. 어디에 빈공간이 있어..
+‘+DATA’  이런식으로 하면됨, 파일명을 지정할순 없다. AU 로 구성됨
+왜 이렇게 쪼갰을까요
+데이터가 나눠져있으면 동시작업이 가능해서 처리속도를 높인다
+분산 -> 처리속도 높이기 가 가장큰 장점이다
+strip and mirror
+성능은 결국 I/O -> 그러면 ASM 써
+
+# ASM Instance
+DB Instance => ASM Instance => ASM DiskGroup
+( 관련 프로세스 )
+ASMB : db instance 와 asm instance 를 통신해준다.
+RBAL : 리밸런스 담당
+ARBn : 리밸런스 담당, RBAL 요청받아 실질적 작업수행한다.
+DBWR : 
+CSS :
+
+백그라운드 프로세스
+ps -ef|grep +ASM
+oracle    7000     1  0 20:46 ?        00:00:00 asm_pmon_+ASM
+oracle    7002     1  0 20:46 ?        00:00:00 asm_psp0_+ASM
+oracle    7004     1  0 20:46 ?        00:00:00 asm_vktm_+ASM
+oracle    7008     1  0 20:46 ?        00:00:00 asm_gen0_+ASM
+oracle    7010     1  0 20:46 ?        00:00:00 asm_diag_+ASM
+oracle    7012     1  0 20:46 ?        00:00:01 asm_dia0_+ASM
+oracle    7014     1  0 20:46 ?        00:00:00 asm_mman_+ASM
+oracle    7016     1  0 20:46 ?        00:00:00 asm_dbw0_+ASM
+oracle    7018     1  0 20:46 ?        00:00:00 asm_lgwr_+ASM
+oracle    7020     1  0 20:46 ?        00:00:00 asm_ckpt_+ASM
+oracle    7022     1  0 20:46 ?        00:00:00 asm_smon_+ASM
+oracle    7024     1  0 20:46 ?        00:00:00 asm_rbal_+ASM
+oracle    7026     1  0 20:46 ?        00:00:00 asm_gmon_+ASM
+oracle    7028     1  0 20:46 ?        00:00:00 asm_mmon_+ASM
+oracle    7030     1  0 20:46 ?        00:00:00 asm_mmnl_+ASM
+oracle    7044     1  0 20:46 ?        00:00:00 oracle+ASM (DESCRIPTION=(LOCAL=YES)(ADDRESS=(PROTOCOL=beq)))
+oracle    7046     1  0 20:46 ?        00:00:00 oracle+ASM (DESCRIPTION=(LOCAL=YES)(ADDRESS=(PROTOCOL=beq)))
+oracle    7070     1  0 20:46 ?        00:00:00 asm_asmb_+ASM
+oracle    7072     1  0 20:46 ?        00:00:00 oracle+ASM_asmb_+asm (DESCRIPTION=(LOCAL=YES)(ADDRESS=(PROTOCOL=beq)))
+oracle    7119     1  0 20:46 ?        00:00:00 oracle+ASM_asmb_prod (DESCRIPTION=(LOCAL=YES)(ADDRESS=(PROTOCOL=beq)))
+oracle    7695  7694  0 21:17 ?        00:00:00 oracle+ASM (DESCRIPTION=(LOCAL=YES)(ADDRESS=(PROTOCOL=beq)))
+
+(mmon)
+mmon 이 메모리의 스냅샷을 한시간마다 찍어서 SYSAUX 에 저장한다.
+9i -> 10g 로 넘어갈때 나타난게 Advisor 들이다.
+Advisor 는 통계정보(AWR) 를 통해서 recommendation 을 해야한다.
+ADDM : 디비에 대해 진단해놓은것 => Advisor
+튜닝 : 문장튜닝, 서버튜닝
+
+
+
+# ASM 인스턴스 초기화 파라미터
+instance_type : RDBMS vs ASM
+DB_UNIQUE_NAME : 데이터베이스에 대한 글로벌 이름 설정 파라미터 예) +ASM
+ASM_POWER_LIMIT : ARBn 프로세스의 수를 제어하는 파라미터이다.
+ASM_DISKGROUPS:
+ASM_DISKSTRING:
+
+# ASM 접속
+[PROD@host01 ~]$ . oraenv
+ORACLE_SID = [PROD] ? +ASM
+The Oracle base remains unchanged with value /u01/app/oracle
+
+SYS@+ASM>select instance_name,status from v$instance;
+INSTANCE_NAME    STATUS
+---------------- ------------
++ASM             STARTED
+
+SYS@+ASM>show parameter instance_type
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+instance_type                        string      asm
+
+SYS@+ASM>show parameter asm_power
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+asm_power_limit                      integer     1
+
+SYS@+ASM>show parameter spfile
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+spfile                               string      +DATA/asm/asmparameterfile/reg
+                                                 istry.253.1045962233
+
+SYS@+ASM>select name, total_mb,free_mb, usable_file_mb from v$asm_diskgroup;
+NAME                             TOTAL_MB    FREE_MB USABLE_FILE_MB
+------------------------------ ---------- ---------- --------------
+DATA                                16128       7318           2507
+FRA                                  9216       8813           8813
+
+
+SYS@+ASM>select path, name,mount_status, header_status, mode_status, state, total_mb from v$asm_disk order by 1;
+
+mount_satus : cached (사용중), closed( 아직 사용중이 아니다 )
+state : member (그룹에 속해있다), formed( 멤버였으나 지금은 아닌거 )
+,provisioned (), candidated()
+# failgroup 을 포함한 디스크그룹을 생성해보자.
+sysdba 가 아닌 sysasm 으로 들어가보자.
+[+ASM@host01 ~]$ sqlplus / as sysasm
+SYS@+ASM> create diskgroup DG01 normal redundancy
+  failgroup DB01_01 disk 'ORCL:ASMDISK12'
+  failgroup DG01_02 disk 'ORCL:ASMDISK13';
+Diskgroup created.
+
+SYS@+ASM>select name, total_mb,free_mb, usable_file_mb from v$asm_diskgroup;
+NAME                             TOTAL_MB    FREE_MB USABLE_FILE_MB
+------------------------------ ---------- ---------- --------------
+DATA                                16128       7318           2507
+FRA                                  9216       8813           8813
+DG01                                 4608       4506           2253
+
+# 디스크그룹 삭제하기
+SYS@+ASM>drop diskgroup dg01;
+Diskgroup dropped.
+SYS@+ASM>select path, name,mount_status, header_status, mode_status, state, total_mb from v$asm_disk order by 1;
+PATH                 NAME       MOUNT_S HEADER_STATU MODE_ST STATE      TOTAL_MB
+-------------------- ---------- ------- ------------ ------- -------- ----------
+ORCL:ASMDISK01       ASMDISK01  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK02       ASMDISK02  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK03       ASMDISK03  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK04       ASMDISK04  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK05       ASMDISK05  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK06       ASMDISK06  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK07       ASMDISK07  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK08       ASMDISK08  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK09       ASMDISK09  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK10       ASMDISK10  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK11       ASMDISK11  CACHED  MEMBER       ONLINE  NORMAL         2304
+ORCL:ASMDISK12                  CLOSED  FORMER       ONLINE  NORMAL            0
+ORCL:ASMDISK13                  CLOSED  FORMER       ONLINE  NORMAL            0
+ORCL:ASMDISK14                  CLOSED  PROVISIONED  ONLINE  NORMAL            0
+ORCL:ASMDISK15                  CLOSED  PROVISIONED  ONLINE  NORMAL            0
+
+그룹에서 삭제하면 FORMER 로 변경된것을 알수있다.
+그리고 디스크2개를 추가했다 14,15
+
+뺀놈을 DATA 그룹에 넣으면 다음과 같이 된다.
+SYS@+ASM>alter diskgroup data add disk 'ORCL:ASMDISK12';
+SYS@+ASM>select path, name,mount_status, header_status, mode_status, state, total_mb from v$asm_disk order by 1;
+PATH                 NAME       MOUNT_S HEADER_STATU MODE_ST STATE      TOTAL_MB
+-------------------- ---------- ------- ------------ ------- -------- ----------
+ORCL:ASMDISK12       ASMDISK12  CACHED  MEMBER       ONLINE  NORMAL         2304
+
+SYS@+ASM>select name, total_mb,free_mb, usable_file_mb from v$asm_diskgroup;
+
+NAME         TOTAL_MB    FREE_MB USABLE_FILE_MB
+---------- ---------- ---------- --------------
+DATA            18432       9620           3658
+FRA              9216       8813           8813
+
+
+DATA 그룹은 여러개의 디스크로 구성이 되어있는데 그중에서 한개를 빼보자
+SYS@+ASM>alter diskgroup data drop disk asmdisk01;
+Diskgroup altered.
+
+SYS@+ASM>select path, name,mount_status, header_status, mode_status, state, total_mb from v$asm_disk order by 1;
+PATH                 NAME       MOUNT_S HEADER_STATU MODE_ST STATE      TOTAL_MB
+-------------------- ---------- ------- ------------ ------- -------- ----------
+ORCL:ASMDISK01       ASMDISK01  CACHED  MEMBER       ONLINE  DROPPING       2304
+한참지난후에 다음과 같이 변경이 된다.
+ORCL:ASMDISK01                  CLOSED  FORMER       ONLINE  NORMAL            0
+
+ASM 이 아닌 PROD 에서 조회해보면
+SYS@PROD> select group_number, disk_number,name, failgroup, total_mb from v$asm_disk;
+GROUP_NUMBER DISK_NUMBER NAME       FAILGROUP    TOTAL_MB
+------------ ----------- ---------- ---------- ----------
+           1           1 ASMDISK02  ASMDISK02        2304
+           1           2 ASMDISK03  ASMDISK03        2304
+           1           3 ASMDISK04  ASMDISK04        2304
+           2           0 ASMDISK05  ASMDISK05        2304
+           2           1 ASMDISK06  ASMDISK06        2304
+           2           2 ASMDISK07  ASMDISK07        2304
+           2           3 ASMDISK08  ASMDISK08        2304
+           1           4 ASMDISK09  ASMDISK09        2304
+           1           5 ASMDISK10  ASMDISK10        2304
+           1           6 ASMDISK11  ASMDISK11        2304
+           1           7 ASMDISK12  ASMDISK12        2304
+           0          12                                0
+           0           2                                0
+           0           1                                0
+           0           0                                0
+
+테이블 스페이스 만들기 ( 경로는 따로 안해줘도 되는이유는 OMF 때문 )
+SYS@PROD> create tablespace tbs1 datafile '+DATA' size 50M;
+Tablespace created.
+
+SYS@PROD> select file_id,file_name, tablespace_name from dba_data_files;
+FILE_ID FILE_NAME                                                    TABLESPACE_NAME
+------- ------------------------------------------------------------ 
+      4 +DATA/prod/datafile/users.268.1045964745                     USERS
+      3 +DATA/prod/datafile/undotbs1.267.1045964745                  UNDOTBS1
+      2 +DATA/prod/datafile/sysaux.266.1045964745                    SYSAUX
+      1 +DATA/prod/datafile/system.265.1045964745                    SYSTEM
+      5 +DATA/prod/datafile/example.274.1045964949                   EXAMPLE
+      6 +DATA/prod/datafile/tbs1.276.1046985573                      TBS1
+
+방금만든 테이블스페이스(tbs1) 에 테이블을 하나 만들고 데이터를 넣어보자.
+
+SYS@PROD> create table t1 tablespace tbs1 as select * from sh.sales;
+Table created.
+
+SYS@PROD> select count(*) from t1;
+  COUNT(*)
+----------
+    918843
+
+
+# 리밸런싱 해보자.
+SYS@PROD> select group_number, disk_number, name, failgroup, total_mb from v$asm_disk where group_number=1;
+GROUP_NUMBER DISK_NUMBER NAME       FAILGROUP    TOTAL_MB
+------------ ----------- ---------- ---------- ----------
+           1           1 ASMDISK02  ASMDISK02        2304
+           1           2 ASMDISK03  ASMDISK03        2304
+           1           3 ASMDISK04  ASMDISK04        2304
+           1           4 ASMDISK09  ASMDISK09        2304
+           1           5 ASMDISK10  ASMDISK10        2304
+           1           6 ASMDISK11  ASMDISK11        2304
+           1           7 ASMDISK12  ASMDISK12        2304
+
+디스크 하나를 오프라인 시켜보자. ( 오프라인후 1시간지나면 drop 해버려라는 명령 )
+SYS@+ASM>alter diskgroup data offline disk asmdisk02 drop after 0.0h;
+alter diskgroup data offline disk asmdisk02 drop after 0.0h
+*
+ERROR at line 1:
+ORA-15032: not all alterations performed
+ORA-15283: ASM operation requires compatible.rdbms of 11.1.0.0.0 or higher
+근데.. 에러가 나네 호환성 머시기라고 하는구만  
+
+SYS@+ASM>select name, compatibility, database_compatibility from v$asm_diskgroup;
+NAME       COMPATIBILITY        DATABASE_COMPATIBILITY
+---------- -------------------- 
+DATA       11.2.0.0.0           10.1.0.0.0
+FRA        11.2.0.0.0           10.1.0.0.0
+
+호환성을 맞춰주자.
+SYS@+ASM>alter diskgroup data set attribute 'compatible.rdbms'='11.2.0.0.0';
+Diskgroup altered.
+
+그리고 디스크를 오프라인 시키자.
+SYS@+ASM>alter diskgroup data offline disk asmdisk02 drop after 0.0h;
+Diskgroup altered.
+
+SYS@+ASM>select group_number, name, mount_status, mode_status, free_mb from v$asm_disk where group_number=1
+GROUP_NUMBER NAME       MOUNT_S MODE_ST    FREE_MB
+------------ ---------- ------- ------- ----------
+           1 _DROPPED_0 MISSING OFFLINE       2160
+             001_DATA
+           1 ASMDISK03  CACHED  ONLINE         824
+           1 ASMDISK04  CACHED  ONLINE         829
+           1 ASMDISK09  CACHED  ONLINE         825
+           1 ASMDISK10  CACHED  ONLINE         826
+           1 ASMDISK11  CACHED  ONLINE         829
+           1 ASMDISK12  CACHED  ONLINE         834
+
+디스크삭제후  데이터가 잘 보존되어있는지 확인해보자. 
+SYS@PROD> select count(*) from t1;
+  COUNT(*)
+----------
+    918843
+
+하지만 이게 데이터버퍼캐시에 남아있는것일수도 있으니 데이터조작을 한다음에 다시 조회해보자.
+SYS@PROD> delete t1 where rownum<=10000;
+10000 rows deleted.
+
+SYS@PROD> commit;
+Commit complete.
+
+SYS@PROD> select count(*) from t1;
+  COUNT(*)
+----------
+    908843
+
+리밸런싱이 잘된것을 확인할수있다.
+
+아까 오프라인 시켰던 asmdisk02 를 완전히 삭제해보자.
+[root@host01 ~]# oracleasm deletedisk asmdisk02
+
+다시 생성해보자.
+[root@host01 ~]# oracleasm createdisk asmdisk02 /dev/xvdc
+
+다시 디스크그룹에 추가시키자. 그러면 또다시 리밸런싱이 일어난다.
+SYS@+ASM>alter diskgroup data add disk 'ORCL:ASMDISK02' size 2304M rebalance power 11;
+Diskgroup altered.
+
+SYS@+ASM>select group_number, name, mount_status, mode_status, free_mb from v$asm_disk where group_number=1;
+GROUP_NUMBER NAME       MOUNT_S MODE_ST    FREE_MB
+------------ ---------- ------- ------- ----------
+           1 ASMDISK03  CACHED  ONLINE         849
+           1 ASMDISK04  CACHED  ONLINE         851
+           1 ASMDISK09  CACHED  ONLINE         857
+           1 ASMDISK10  CACHED  ONLINE         852
+           1 ASMDISK11  CACHED  ONLINE         850
+           1 ASMDISK12  CACHED  ONLINE         853
+           1 ASMDISK02  CACHED  ONLINE        2016
+SYS@+ASM>/
+GROUP_NUMBER NAME       MOUNT_S MODE_ST    FREE_MB
+------------ ---------- ------- ------- ----------
+           1 ASMDISK03  CACHED  ONLINE         865
+           1 ASMDISK04  CACHED  ONLINE         869
+           1 ASMDISK09  CACHED  ONLINE         874
+           1 ASMDISK10  CACHED  ONLINE         869
+           1 ASMDISK11  CACHED  ONLINE         869
+           1 ASMDISK12  CACHED  ONLINE         871
+           1 ASMDISK02  CACHED  ONLINE        1910
+
+FREE_MB 가 점점 변하는걸 확인할수있다. 최종적으로는 아래와 같이 FREE_MB 가 비슷해진다.
+GROUP_NUMBER NAME       MOUNT_S MODE_ST    FREE_MB
+------------ ---------- ------- ------- ----------
+           1 ASMDISK03  CACHED  ONLINE        1015
+           1 ASMDISK04  CACHED  ONLINE        1015
+           1 ASMDISK09  CACHED  ONLINE        1013
+           1 ASMDISK10  CACHED  ONLINE        1019
+           1 ASMDISK11  CACHED  ONLINE        1016
+           1 ASMDISK12  CACHED  ONLINE        1017
+           1 ASMDISK02  CACHED  ONLINE        1032
+
+
+
+alert log 를 가보자. 근데 prod 가 아니라 +asm 경로로 가야한다.
+[PROD@host01]$ cd /u01/app/oracle/diag/asm/+asm/+ASM/trace
+[PROD@host01 trace]$ vi alert_+ASM.log
+NOTE: starting rebalance of group 1/0x35e8a125 (DATA) at power 11
+Starting background process ARB0
+SUCCESS: alter diskgroup data add disk 'ORCL:ASMDISK02' size 2304M rebalance power 11
+
+
+
+# ASMCMD 유틸리티를 사용해보자. 
+
+[PROD@host01 ~]$ asmcmd
+Connected to an idle instance.
+sh: /u01/app/oracle/product/11.2.0.4/dbhome/bin/clsecho: No such file or directory
+ASMCMD>  에러나네...
+
+[PROD@host01 ~]$ . oraenv
+ORACLE_SID = [PROD] ? +ASM
+The Oracle base remains unchanged with value /u01/app/oracle
+
+[+ASM@host01 ~]$ asmcmd
+ASMCMD>  에러없이 잘 떴다.
+ASMCMD> ls
+DATA/
+FRA/
+OS 명령어와 유사하다.
+ASMCMD> ls -l
+State    Type    Rebal  Name
+MOUNTED  NORMAL  N      DATA/
+MOUNTED  EXTERN  N      FRA/
+
+ASMCMD> pwd
++
+ASMCMD> cd +DATA
+ASMCMD> ls
+ASM/
+PROD/
+
+ASMCMD> cd PROD
+ASMCMD> ls
+CONTROLFILE/
+DATAFILE/
+ONLINELOG/
+PARAMETERFILE/
+TEMPFILE/
+spfileprod.ora
+ASMCMD> cd controlfile   대소문자 구분이 없네..
+ASMCMD> ls
+Current.256.1045964097
+Current.269.1045964835
+
+복사하기
+ASMCMD> cp Current.256.1045964097 /tmp
+copying +DATA/PROD/controlfile/Current.256.1045964097 -> /tmp/Current.256.1045964097
+
+삭제하기
+ASMCMD> rm Current.256.1045964097
+
+디스크 그룹 목록보기
+ASMCMD> lsdg
+State    Type    Rebal  Sector  Block       AU  Total_MB  Free_MB  Req_mir_free_MB  Usable_file_MB  Offline_disks  Voting_files  Name
+MOUNTED  NORMAL  N         512   4096  1048576     16128     7175             2304            2435              0             N  DATA/
+MOUNTED  EXTERN  N         512   4096  1048576      9216     8813                0            8813              0             N  FRA/
+
+디스크그룹만들기 (명령어가 좀 까다롭네)
+ASMCMD> mkdg <dg name="DATA2" redundancy="external"> <dsk string="ORCL:ASMDISK13" /> <dsk string="ORCL:ASMDISK14" /> </dg>
+
+디스크 그룹 DROP 시키기
+ASMCMD> dropdg DATA2
+
+
+# CRSCTL 명령어를 살펴보자.
+
+RAC, 클러스터 운영할땐 crsctl, srvctl 명령어를 익숙하게 하면좋다.
+
+[PROD@host01 ~]$ crsctl stat resource -t
+--------------------------------------------------------------------------------
+NAME           TARGET  STATE        SERVER                   STATE_DETAILS
+--------------------------------------------------------------------------------
+Local Resources
+--------------------------------------------------------------------------------
+ora.DATA.dg
+               ONLINE  ONLINE       host01
+ora.FRA.dg
+               ONLINE  ONLINE       host01
+ora.LISTENER.lsnr
+               ONLINE  ONLINE       host01
+ora.asm
+               ONLINE  ONLINE       host01                   Started
+ora.ons
+               OFFLINE OFFLINE      host01
+--------------------------------------------------------------------------------
+Cluster Resources
+--------------------------------------------------------------------------------
+ora.cssd
+      1        ONLINE  ONLINE       host01
+ora.diskmon
+      1        OFFLINE OFFLINE
+ora.evmd
+      1        ONLINE  ONLINE       host01
+ora.prod.db
+      1        ONLINE  ONLINE       host01                   Open
+
+
+[PROD@host01 ~]$ crsctl config has
+CRS-4622: Oracle High Availability Services autostart is enabled.
+
+[+ASM@host01 tmp]$ cat /etc/oracle/scls_scr/host01/oracle/ohasdstr
+enable
+
+[+ASM@host01 tmp]$ ps -ef|grep smon
+oracle    7203     1  0 20:36 ?        00:00:00 asm_smon_+ASM
+oracle    7292     1  0 20:36 ?        00:00:00 ora_smon_PROD
+
+[+ASM@host01 tmp]$ kill -9 7292
+ora_smon_PROD 이 프로세스를 죽여도 좀있다가 다시 살아난다.(autostart)
+
+하지만 disable 되어있으면 재기동이 안된다.
+[+ASM@host01 tmp]$ crsctl disable has
+CRS-4621: Oracle High Availability Services autostart is disabled.
+
+[+ASM@host01 tmp]$ cat /etc/oracle/scls_scr/host01/oracle/ohasdstr
+disable
+
+이상태에서 리부팅을 시키면 smon 이 뜨는지 확인해보자
+[PROD@host01 ~]$ ps -ef|grep smon
+oracle    7049  6979  0 22:03 pts/1    00:00:00 grep smon
+
+[PROD@host01 ~]$ sqlplus / as sysdba
+SQL*Plus: Release 11.2.0.4.0 Production on Wed Jul 29 22:03:43 2020
+Copyright (c) 1982, 2013, Oracle.  All rights reserved.
+Connected to an idle instance.
+흐미 오라클 안뜨네
+
+[PROD@host01 ~]$ crsctl stat res -t
+CRS-4639: Could not contact Oracle High Availability Services
+CRS-4000: Command Status failed, or completed with errors.
+
+[PROD@host01 ~]$ crsctl start has
+시간이 한참 걸리네..
+CRS-4123: Oracle High Availability Services has been started.
+
+리스너도 컨트롤 할수있다.
+[PROD@host01 ~]$ crsctl status resource ora.LISTENER.lsnr
+NAME=ora.LISTENER.lsnr
+TYPE=ora.listener.type
+TARGET=ONLINE
+STATE=ONLINE on host01
+리스너 멈추기
+[PROD@host01 ~]$ crsctl stop resource ora.LISTENER.lsnr
+CRS-2673: Attempting to stop 'ora.LISTENER.lsnr' on 'host01'
+CRS-2677: Stop of 'ora.LISTENER.lsnr' on 'host01' succeeded
+
+리스너 다시 스타트
+[PROD@host01 ~]$ crsctl start resource ora.LISTENER.lsnr
+CRS-2672: Attempting to start 'ora.LISTENER.lsnr' on 'host01'
+CRS-2676: Start of 'ora.LISTENER.lsnr' on 'host01' succeeded
+
+# SRVCTL 명령어를 알아보자.
+[+ASM@host01 ~]$ srvctl -help
+Usage: srvctl <command> <object> [<options>]
+    commands: enable|disable|start|stop|status|add|remove|modify|getenv|setenv|unsetenv|config|upgrade
+    objects: database|service|asm|diskgroup|listener|home|ons
+For detailed help on each command and object and its options use:
+  srvctl <command> -h or
+  srvctl <command> <object> -h
+
+
+[+ASM@host01 ~]$ srvctl config -help
+The SRVCTL config command displays the configuration for the object stored in the OCR.
+
+Usage: srvctl config database [-d <db_unique_name> [-a]] [-v]
+Usage: srvctl config service -d <db_unique_name> [-s <service_name>] [-v]
+Usage: srvctl config asm [-a]
+Usage: srvctl config listener [-l <lsnr_name>]
+Usage: srvctl config ons
+For detailed help on each command and object and its options use:
+  srvctl <command> <object> -h
+Usage (for backward compatibility): srvctl config
+Usage (for backward compatibility): srvctl config -p <dbname> -n <node>
+Usage (for backward compatibility): srvctl config -V
+
+[+ASM@host01 ~]$ srvctl status listener
+Listener LISTENER is enabled
+Listener LISTENER is running on node(s): host01
+[+ASM@host01 ~]$ srvctl stop listener -l listener
+[+ASM@host01 ~]$ srvctl status listener
+Listener LISTENER is enabled
+Listener LISTENER is not running
+[+ASM@host01 ~]$ lsnrctl start listener
+
+데이터베이스 상태
+[+ASM@host01 ~]$ srvctl status database -d PROD
+Database is running.
+
+[+ASM@host01 ~]$ srvctl config database -d PROD
+Database unique name: PROD
+Database name: PROD
+Oracle home: /u01/app/oracle/product/11.2.0.4/dbhome
+Oracle user: oracle
+Spfile: +DATA/prod/spfileprod.ora
+Domain:
+Start options: open
+Stop options: immediate
+Database role: PRIMARY
+Management policy: AUTOMATIC
+Database instance: PROD
+Disk Groups: DATA,FRA
+Services:
+
+디비 셧다운, 스타트 시키기
+[+ASM@host01 ~]$ srvctl stop database -d PROD
+[+ASM@host01 ~]$ srvctl start database -d PROD
+
+
+ASM 멈추기
+[+ASM@host01 ~]$ srvctl stop asm -o abort -f
+
+현재상태 확인
+
+
+ASM 시작하기
+[+ASM@host01 ~]$ srvctl start asm
+
+
+리스너 추가하기
+netca 로 리스너를 만들어봤는데 srvctl로도 만들수있다.
+[+ASM@host01 ~]$ srvctl add listener -l LSNR2 -p TCP:1522 -o /u01/app/oracle/product/11.2.0.4/grid
+
+[+ASM@host01 ~]$ srvctl start listener -l LSNR2
+[+ASM@host01 ~]$ crsctl status resource ora.LSNR2.lsnr
+NAME=ora.LSNR2.lsnr
+TYPE=ora.listener.type
+TARGET=ONLINE
+STATE=ONLINE on host01
+
+[+ASM@host01 ~]$ srvctl remove listener -l LSNR2
+
+
+
+
+
+
+
+
+
+
+

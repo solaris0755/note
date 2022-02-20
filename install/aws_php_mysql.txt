@@ -1,0 +1,347 @@
+php7  설치
+yum install httpd24 php73 php73-gd php73-imap php73-mbstring php73-mysqlnd php73-opcache php73-pdo php73-pecl-apcu mysql-server mysql php73-gd php73-mbstring php73-mysql php73-pear xinetd subversion ftp rdate
+
+
+[ IP 차단 ]
+iptables -A INPUT -s 112.168.11.129 -j DROP
+iptables -D INPUT -s 112.168.11.129 -j DROP  ; 위의 명령을 취소하는 명령
+
+A 클래스 대역 차단
+iptables -A INPUT -s 150.0.0.0/8 -j DROP
+
+SMTP 포트 차단
+iptables -A INPUT -p tcp --dport 25 -j DROP
+
+Iptable 편집 
+/etc/sysconfig/iptables 
+service iptables restart
+
+[ 개발서버 아이피 관리 ]
+sudo su
+/etc/sysconfig/iptables
+service iptables restart
+
+
+ssh 패스워드로 접속되게 설정
+http://ora-sysdba.tistory.com/entry/Cloud-Computing-Amazon-EC2-%EC%9D%B8%EC%8A%A4%ED%84%B4%EC%8A%A4%EC%9D%98-ROOT-%EA%B3%84%EC%A0%95%ED%99%9C%EC%84%B1%ED%99%94
+
+vi /etc/ssh/sshd_config
+PasswordAuthentication yes
+
+service sshd restart
+
+[ 부팅시 서비스 추가 ]
+ntsysv
+
+
+[ 크론탭 실행안될때 아래 내용 추가할것 ]
+MAILTO=""
+
+[ Question ]
+- micro instance 의 cpu 를 어떻게 늘릴수있을까? change instance type ?
+- instance 를 stop 시키면 요금이 올라가나?
+
+[ 가격 ]
+http://aws.amazon.com/ko/ec2/pricing/
+http://aws.amazon.com/ko/ec2/instance-types/
+
+[ access key ]
+https://portal.aws.amazon.com/gp/aws/securityCredentials
+
+가격 줄이기 방법
+http://charsyam.wordpress.com/2011/10/16/%EC%95%84%EB%A7%88%EC%A1%B4-ec2-%EA%B0%80%EA%B2%A9%EC%9D%84-%EC%A4%84%EC%9D%B4%EB%8A%94-7%EA%B0%80%EC%A7%80-tip/
+
+
+디스크 추가하기
+http://blog.naver.com/PostView.nhn?blogId=kanelon&logNo=80124416275&parentCategoryNo=1&viewDate=&currentPage=1&listtype=0
+
+프로그램 설치
+yum install -y telnet httpd mysql-server mysql php php-devel php-gd php-mbstring php-mysql php-pear xinetd subversion ftp rdate
+
+
+
+포트
+22, 80, 873(rsync)
+
+iptables -D INPUT 5
+
+디비를 옮길때 암호가 틀려지는 현상
+배팅내역에 체크섬변경으로 인하여 불일치 생길수있음
+
+hostname 변경
+echo "black" > /proc/sys/kernel/hostname
+vi /etc/sysconfig/network
+
+
+시간대 
+ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
+
+
+GeoIP
+yum install -y GeoIP-devel
+pecl install geoip
+then, as prompt, put "extension=geoip.so" into php.ini. Works
+
+http://dev.maxmind.com/geoip/legacy/install/country/
+
+sudo su
+cd /usr/share/GeoIP/
+rsync -av dev.zwork.info::R/backup/install/GeoIP.dat .
+
+
+crontab 
+5 1 * * * rdate -s time.bora.net
+
+# WEB
+5 3 * * * /bin/find /var/log/httpd -ctime +0 -exec rm {} \;
+
+
+
+
+
+
+inittab
+/etc/init/서비스.conf
+start on runlevel [2345]
+stop on runlevel [!$RUNLEVEL]
+respawn
+exec /usr/bin/php /mnt/test.php
+
+initctl stop 서비스명
+initctl start 서비스명
+initctl reload 서비스명
+
+
+
+
+
+
+/etc/my.cnf
+old_passwords=1 
+
+
+/etc/php.ini
+display_errors = On
+short_open_tag = On
+error_reporting = E_ALL & ~E_DEPRECATED  & ~E_NOTICE
+date.timezone = Asia/Seoul
+max_input_vars = 3000 # default 1000
+session.cookie_httponly = true
+
+
+/etc/httpd/conf.d/php.conf
+AddType application/x-httpd-php .php .html .htm .inc
+DirectoryIndex index.html index.php
+
+
+/etc/httpd/conf/httpd.conf
+AddDefaultCharset Off
+
+<DirectoryMatch ".*\.svn">
+Order allow,deny
+Deny from all
+Satisfy All
+  php_admin_flag engine off
+</DirectoryMatch>
+<DirectoryMatch "/mnt/([^\/]*)/data/">
+  php_admin_flag engine off
+</DirectoryMatch>
+
+
+
+/etc/bashrc
+alias conf='vim /etc/httpd/conf/httpd.conf'
+export LANG=ko_KR.euc-kr
+alias admin='echo "select mb_id,mb_1 from g4_member where mb_id in (select cf_admin from g4_config) " | mysql -u root -h localhost -D '
+
+
+mysql 설정
+rsync -av demo::R/install/mysql.sql .
+
+
+CREATE USER '유저'@'호스트' IDENTIFIED BY '비번';
+
+INSERT INTO `mysql`.`db`(`Host`,`Db`,`User`,`Select_priv`,`Insert_priv`,`Update_priv`,`Delete_priv`,`Create_priv`,`Drop_priv`,`Grant_priv`,`References_priv`,`Index_priv`,`Alter_priv`,`Create_tmp_table_priv`,`Lock_tables_priv`,`Create_view_priv`,`Show_view_priv`,`Create_routine_priv`,`Alter_routine_priv`) VALUES ( '호스트','디비','유저','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y');
+
+FLUSH PRIVILEGES
+
+
+
+
+use test;
+update user set user='zeus';
+update db set user='zeus',db='zeus';
+insert into mysql.user select * from user;
+insert into mysql.db select * from db;
+flush privileges;
+
+
+Suhosin
+http://download.suhosin.org/suhosin-0.9.35.tgz
+#> cd suhosin
+#> phpize
+#> ./configure 
+#> make
+#> make install
+
+php.ini
+extension=suhosin.so
+suhosin.executor.disable_eval=On
+suhosin.get.max_vars = 3000
+suhosin.post.max_vars = 3000
+suhosin.request.max_vars = 3000
+
+
+
+PHP 5.3x 에 따른 어플리케이션 수정사항
+
+lib/common.lib.php : session_register 주석처리
+bbs/list.php : split -> explode 로 변경
+auth/AuthMobile2.php
+common.php : error_reporting(E_ALL ^ E_NOTICE ^ E_DEPRECATED );
+
+
+
+
+
+< 디스크 추가하기>
+fdisk -l
+fdisk /dev/xvdf
+n -> p -> 1 -> w (파티션 생성)
+fdisk -l /dev/xvdf
+mke2fs -T ext3 /dev/xvdf1 (포맷)
+mount /dev/xvdf1 /mnt ( / 폴더에서 실행)
+df -h
+
+
+
+
+vi /etc/fstab (위의 디스크 추가 시 마운트는 일시적인 것으로 리부팅 시 사라짐. 이를 유지시키기 위해 해당 작업 실행)
+#
+LABEL=/     /           ext4    defaults,noatime  1   1
+/dev/xvdf1  /mnt        auto    defaults,noatime 0   0
+tmpfs       /dev/shm    tmpfs   defaults        0   0
+devpts      /dev/pts    devpts  gid=5,mode=620  0   0
+sysfs       /sys        sysfs   defaults        0   0
+proc        /proc       proc    defaults        0   0
+
+
+
+
+
+
+
+[ 원격관리 ]
+ssh-keygen
+cd .ssh/
+vi id_rsa.pub  해서 안의 내용을 복사한다음 대상 서버에 가서
+vi .ssh/authorized 파일에 append 시키면 된다.
+
+
+
+
+
+[ putty 설정 ]
+내 컴퓨터\HKEY_CURRENT_USER\Softeare\Simon Tatham\PuTTY
+레지스트리->레지스트리 파일 내보내기->선택한 분기 에서 "PuTTYHosts.reg" 처럼 원하시는 이름으로 저장하세요
+
+
+[ npm , node, phantomjs , casperJS 설치 ]
+yum install epel-release
+yum install npm
+yum -y install fontconfig  fontconfig-devel
+
+npm install -g n
+n stable
+node -v
+
+npm install phantomjs
+npm install -g casperjs
+
+[ 아파2.4 install ]
+yum update
+
+yum remove httpd httpd-tools-2.2.31-1.8.amzn1.x86_64 php php-devel php-xml-5.3.29-1.8.amzn1.x86_64 php-process-5.3.29-1.8.amzn1.x86_64 php-cli-5.3.29-1.8.amzn1.x86_64 php-common-5.3.29-1.8.amzn1.x86_64
+
+
+yum install php54 php54-devel php54-mysql GeoIP-devel php-pear mysql subversion ftp rdate gcc  php54-mcrypt
+
+
+Suhosin, GeoIP 재설
+pecl install geoip
+
+Timezone 재설정 
+ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
+
+Modsecurity 설정
+yum install mod24_security.x86_64
+
+yum install mod_security mod_security_crs
+
+Rsync 서버 세팅
+
+yum install xinetd
+vi /etc/xinetd.d/rsync  ;  disable = no  로 변경
+vi /etc/rsyncd.conf 
+[R]
+path = /mnt
+comment = ABZ Server
+uid = ec2-user
+gid = ec2-user
+use chroot = yes
+read only = no
+max connection = 3
+timeout 300
+
+
+service xinetd restart
+
+svn
+
+svnadmin create naver --fs-type fsfs
+
+conf/passwd, svnserve.conf
+
+killall svnserve
+svnserve -d -r /mnt/svn
+
+
+
+~/.subversion/servers
+[global]
+store-passwords = yes
+store-plaintext-passwords = yes
+
+~/.subversion/config
+[auth]
+store-passwords = yes
+store-auth-creds = yes
+
+[helpers] 
+editor-cmd = vi
+
+
+
+
+# cloudflare
+
+[ https 문제 ]
+cloud flare  Flexible
+PageRules 적용
+
+# wordpress
+ftp 업로드 실행되게
+
+[ ftp 동작 오류 ]
+Unable to locate WordPress Root directory.
+Installation Failed
+
+wp-config.php
+
+if(is_admin()) {
+        add_filter('filesystem_method', @create_function('$a', 'return "direct";' ));
+        define( 'FS_CHMOD_DIR', 0751 );
+}
+      
+
+

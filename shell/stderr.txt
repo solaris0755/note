@@ -1,0 +1,41 @@
+$ cmd   > /dev/null   2> &1  
+
+이명령어는 생략된것이 있다. 생략된것을 풀어쓰면
+
+$ cmd   1> /dev/null   2> &1  
+
+
+0 : standard input
+
+1 : standard output
+
+2 : standard error
+
+
+즉, 표준출력은 /dev/null 로 보내고  표준에러도 첫번째놈( &1 -> /dev/null )  로 보내라라는 뜻이다.
+
+
+보통 크론탭으로 돌리는것들에서 에러가나는지 같은 로그에 찍고자한다면
+
+$ batch_cmd > batch.log 2>&1
+
+
+만약 에러만 다른로그에 찍고 싶다면
+
+$ batch_cmd > batch.log 2> batch_err.log
+
+
+그런데 로그란건 누적으로 찍어야 하니 > 대신 >> 를 쓰도록 해야한다.
+
+$ batch_cmd >> batch.log 2>>&1
+
+
+메세지 출력은 보고싶지 않고 에러만 보고싶다면
+
+$ batch_cmd > /dev/null   2>>&1
+
+
+
+추가자료
+
+https://www.youtube.com/watch?v=Cqanrev2jXw

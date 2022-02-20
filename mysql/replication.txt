@@ -1,0 +1,28 @@
+[ MySQL Replication ]
+http://juhyunsik.blogspot.kr/2012/05/mysql-replication.html
+
+grant replication slave on *.* to 'slave'@'172.%' identified by '';
+
+
+mysql> show master status\G
+*************************** 1. row ***************************
+            File: mysql-bin.000001
+        Position: 2103060
+    Binlog_Do_DB: red
+Binlog_Ignore_DB: 
+1 row in set (0.00 sec)
+
+mysql> CHANGE MASTER TO 
+MASTER_HOST='172.31.26.174',
+MASTER_USER='slave',
+MASTER_PASSWORD='',
+MASTER_PORT=3306,
+MASTER_LOG_FILE='mysql-bin.000001',
+MASTER_LOG_POS=2103060
+;
+
+mysqldump -u root -h localhost red --delete-master-logs > red.sql
+
+
+
+

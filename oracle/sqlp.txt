@@ -1,1 +1,134 @@
+################
+# 시험 tips
+################
+- 시험시간은 3시간 
+- 중간에 화장실 갈수없다. 물을 많이 먹지 말라.
+- 컴퓨터 사인펜, 볼펜, 늦지 않게 가기
+
+################
+기출문제
+################
+or expand , use_concat
+병렬쿼리
+ERD 정확히 해석하기
+ERD를 보고 몇차 정규화인지 해석하기
+수직분할 , 수평분할
+윈도우함수
+rownum=2, rownum>0
+조건부 insert, merge, 다중 insert
+start with prior
+subq pushdown
+range partition 의 범위와 position
+3개 테이블 조인시 순서와 인덱스 처리
+tx, tm 
+undo 의 역할 3가지
+트랜잭션 고립화 4단계 : read uncommited , read committed, repeatable read, serializable
+대기이벤트
+direct path i/o
+parallel(4) 숫자의 의미는 프로세스 개수인가?
+join 두서버간의 dblink
+broadcast
+plan 을 보고 sql 을 역공학 할수있게ㅐ 연습
+driving sitesclustering factor : 인덱스에 컬럼추가하면 f 증가하나?
+데이터 저장구조 : tablespace, segment, extent, block
+In List Iterator plan
+ERD 에서 #, *  점선과 실선의 차이
+partition index
+cube, rollup
+파티션 프루닝
+파티션과 병렬쿼리
+컬럼이 요일이면 어떤 파티션이 좋은가?
+with grant , with admin
+
+
+################
+TODO
+################
 index skip scan 원리, 선두컬럼 중간컬럼 , IN절
+bitmap index 실습
+view merge
+connect by - start with 계층쿼리
+join 에서 inner 선택 기준, 테스트 해보기
+비효율 찾는 방법 trace 에서 , cr 대 rows 비율
+semi-join 이란
+sql_path ?
+통계수집 analyze table, dbms gather stat 
+@?/rdbms/admin/utlxpls 
+LRU 알고리즘
+Hash 알고리즘, sort merge 알고리즘
+sqlplus 에서 set serveroutput off 는 뭐냐?
+emp 테이블 deleete, commit 하고 flashback 으로 되돌리기
+파티셔닝 테스트할수있는 EE 환경
+파티션 테이블에서 인덱스 실습
+힌트의 목록, 정확한 사용법
+materialized view 는 무엇인가?
+특정 테이블에 트랜잭션이 집중된다면 해결책은 무엇인가?
+optional 쿼리 짜는 법
+window 함수 ( ntile )
+집계함수 cube, rollup
+index split , 데이터 삭제시 인덱스 처리 프로세스
+nologging 이란
+힌트 실습 leading(d) use_merge(e) full(d) index(e, temp idx) 
+global hint  use_hash( d e )  swap_join_inputs(e)
+connect by 1억건 -> pga 메모리 부족, 1억건 테이블 만들기?
+BCHR = 캐시에서 곧바로 찾은 블록수/ 총읽은 블록수 * 100
+Query : consistent 모드로 읽은 블록수
+Current : current 모드로 읽은 블록수
+MVCC : 오라클 성능고도화 1 챕터01
+cardinality = 선택도(selectivity)* 전체레코드수
+제1정규형 : 반복그룹제거 => 모든 attribute에 반복그룹이 나타나지 않아야한다. 문제점 I,U,D 이상
+제2정규형 : 부분함수종속성제거 => 기본키에 완전하게 함수종속, 기본키가 2개이상의 attribute로 구성시에 고려
+제3정규형 : 이행종속성제거 => 기본키에 직접종속
+ERD 그리기 : # UID , * mandatory 필수 , o 옵션 
+
+explain plan : 실행계획
+auto trace
+sql trace
+
+bind변수의 부작용
+ - 평균통계를 사용함으로 컬럼통계를 활용할수없다.
+ - 파티션 테이블쿼리시 파티션 통계 활용x
+
+bind변수 부작용 해법
+- 바인드 변수 peeking
+- 적응적 커서공유 (adaptive cursor sharing)
+- 입력값에 따라 sql 분리 : union all
+- literal 상수 사용
+
+긴 sql의 단점
+- 라이브러리 캐시 효율 떨어진다.
+- parse 단계에서 cpu 증가
+
+################
+JOIN
+################
+NL조인에서 inner 테이블의 선택기준은 : inner table 은 비드라이빙 테이블이고 드라이빙 테이블의 반대가 된다. use_nl() 안에 들어가는건 inner 테이블이된다.
+비효율을 찾는방법 : cr 대 row 의 비율
+
+드라이빙 테이블,  비드라이빙테이블을 inner table 이라고 한다.
+
+Hash 조인
+- build 단계 : 작은쪽 테이블을 읽어 해시맵 생성 , hash area 에 담을수있을정도로 충분히 작아야 효과적이다. 해시키 컬럼에 중복값이 거의 없어야 효과적이다.
+- Probe 단계 : 큰쪽 테이블을 읽어 해시테이블을 탐색하여 조인
+- build input 은 작은쪽인데 이것을 힌트로 조정하려면 swap_join_inputs 를 사용
+- 
+
+NL < sort : pga
+NL < Hash : pga
+Sort < Hash : 작은 테이블만 hash 하니깐 sort 는 두쪽 모두 sort
+
+b->a->c->d 순서 , ba는 hash, c와는 NL, d와는 hash 로 하려면 힌트는?
+leading(b,a,c,d) use_hash(a) use_nl(c) use_hash(d) swap_join_inputs(d)
+
+
+################
+JOS 튜닝방법론
+################
+JOIN, ORDER, SCAN 
+
+
+################
+Query Graph 그리는법
+################
+
+

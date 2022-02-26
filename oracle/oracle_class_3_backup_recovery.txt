@@ -1,0 +1,4479 @@
+
+clean database vs dirty database
+
+full check point
+ckpt -> dbwr : 더티버퍼 다 내려써, SCN 을 기록해 -> clean database
+
+리두로그버퍼에서 리두로그파일로 저장하는 경우는 ( background writing )
+commit, 3초후, 버퍼1/3 찰때 , timeout
+
+
+data files, control files, redo log file 의 scn 번호 틀린경우
+smon 이 리커버리 수행, 이때 commit된것도있지만 안된것도 있는데 
+그냥 다 수행 -> rolling forward  ( mount 단계에서 smon 이 수행 )
+하지만 롤백되어야할것을 smon 이 직접 수행하지 않는다. 왜냐면 다운타임을 줄이기위해
+롤백은 open 후에 서버프로세스가 해당데이터 접근시에 롤백한다. ( roll back , SP가수행)
+
+리두로그버퍼가 리두로그파일에 내려왔다고 해서 커밋된것은 아니야
+
+[ 리두로그 파일의 상태 ]
+current :  현재 리두로그버퍼에 있는 변경사항이 내려써지는 것
+active : 로그스위치가 일어난후 해당 그룹과관련된 데이터버퍼캐시에있는 더티블록이 데이터파일에 써지고있는 것
+inactive :  다내려진 써진 상태
+
+로그스위치시에는 -> 풀체크포인트 발생 -> 더티버퍼를 데이터파일에 쓰기한다,SCN 을 기록한다
+
+클린버퍼 ; 데이터버퍼캐시의 내용이 데이터파일의 내용과 동일한것
+더티버퍼 : 동일하지 않은것
+
+커밋됐다고 클린버퍼는 아니야
+
+Incremental Chekpoint 에 대하여
+
+로그스위치를 해야하는데 active버퍼가 아직 작업중이라서 대기해야한다면
+커밋도 대기 ,, 시스템 hang
+해결방법은 뭐가있을까?
+리두로그파일 개수 늘리기, 리두로그사이즈늘리기 -> 임시방편
+DBWR 늘리기 ->이것도 근본해결방식은 아니다 (왜냐.. 데이터공간이 분산되지않다면 )
+리두로그파일이 차지 않아도 체크포인트를 발생시키거나
+더티버퍼가 일정비율이상이면 체크포인트발생시키거나 하면 어떨까?
+=> incremental checkpoint 개념이 등장한다.
+체크포인트 Queue 이용
+increment checkpoint 는 full checkpoint 시에 처리해야할 dirty buffer 의 양을 줄여준다.
+
+No ArchiveLog 모드 
+
+디비를 설치하면 기본적으로 No ArchiveLog Mode 이다.
+
+디비가 꺼졌을때 백업받는거 -> 콜드백업
+켜져있을때 백업 -> 핫 백업
+
+콜드백업으로 scn=2000 으로 백업했다.  시간이 지남에 따라 리두로그 파일이 써지고 한바퀴 순환이 된후 로그파일 덮어써지는 상황이 발생했다. 이때 데이터파일이 깨졌다면 콜드백업 받은 파일로 restore 한후 복구해야하지만 이미 로그파일의 손실이 발생한 상황이라 완전 복구가 불가능한 상황이 된다.
+
+즉 변경사항 로그가 덮어씌워져서 Loss of Data 발생하면 발생한면 불완전복구 가 발생할수있다.
+
+
+
+백업& 리커버리 실습
+
+backup & recovery 실습용 데이터베이스 생성
+PROD1 생성
+컨트롤파일 : 한개만 지정
+
+-- 컨트롤 파일
+SYS@PROD1>select name from v$controlfile;
+NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/control01.ctl
+
+-- 데이터파일
+SYS@PROD1>select name from v$datafile;
+NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/system01.dbf
+/u01/app/oracle/oradata/PROD1/sysaux01.dbf
+/u01/app/oracle/oradata/PROD1/undotbs01.dbf
+/u01/app/oracle/oradata/PROD1/example01.dbf
+/u01/app/oracle/oradata/PROD1/users01.dbf
+
+
+-- 로그 파일
+SYS@PROD1>select member from v$logfile;
+MEMBER
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/redo03.log
+/u01/app/oracle/oradata/PROD1/redo02.log
+/u01/app/oracle/oradata/PROD1/redo01.log
+
+-- 로그파일들에 대한 상태
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   10 CURRENT
+	 2	    8 INACTIVE
+	 3	    9 INACTIVE
+
+
+이런상태에서 백업을 받아보자.
+
+테스트#1 : 정상적인 백업이 가능한 테스트 (NoArchiveLog 모드에서 손실이 발생하지 않은경우)
+
+디비가 기본적으로 세팅되면 No ArchiveLog 모드이다.
+현재 디비 운영모드에서는 온라인 백업이 불가능함
+SYS@PROD1>alter tablespace users begin backup;
+ERROR at line 1:
+ORA-01123: cannot start online backup; media recovery not enabled
+
+정상종료후 백업 받아야 한다.
+SYS@PROD1>shutdown immediate;
+Database closed.
+Database dismounted.
+ORACLE instance shut down.
+
+백업디렉토리를 만들고
+[oracle@edydr1p1]$mkdir backup/PROD1
+[oracle@edydr1p1]$ cp -v /u01/app/oracle/oradata/PROD1/* ~/backup/PROD1
+`/u01/app/oracle/oradata/PROD1/control01.ctl' -> `./control01.ctl'
+`/u01/app/oracle/oradata/PROD1/example01.dbf' -> `./example01.dbf'
+`/u01/app/oracle/oradata/PROD1/redo01.log' -> `./redo01.log'
+`/u01/app/oracle/oradata/PROD1/redo02.log' -> `./redo02.log'
+`/u01/app/oracle/oradata/PROD1/redo03.log' -> `./redo03.log'
+`/u01/app/oracle/oradata/PROD1/sysaux01.dbf' -> `./sysaux01.dbf'
+`/u01/app/oracle/oradata/PROD1/system01.dbf' -> `./system01.dbf'
+`/u01/app/oracle/oradata/PROD1/temp01.dbf' -> `./temp01.dbf'
+`/u01/app/oracle/oradata/PROD1/undotbs01.dbf' -> `./undotbs01.dbf'
+`/u01/app/oracle/oradata/PROD1/users01.dbf' -> `./users01.dbf'
+
+백업이 끝났으면 다시 스타트업하자.
+SYS@PROD1>startup
+
+SYS@PROD1>select * from scott.dept;
+    DEPTNO DNAME	  LOC
+---------- -------------- -------------
+	10 ACCOUNTING	  NEW YORK
+	20 RESEARCH	  DALLAS
+	30 SALES	  CHICAGO
+	40 OPERATIONS	  BOSTON
+
+SYS@PROD1>update scott.dept set loc='SEOUL' where deptno=10;
+SYS@PROD1>commit;
+Commit complete.  → 리두로그버퍼에 있는 변경사항들이 리두로그파일에 쓰여졌다는 의미
+
+로그스위치가 일어났나 확인해보니 별반차이가 없다. 당연하지 이렇게 적은 데이터갖고는 안되지..
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   10 CURRENT
+	 2	    8 INACTIVE
+	 3	    9 INACTIVE
+
+그런데 강제적으로 로그스위치를 일으켜보자.
+SYS@PROD1>alter system switch logfile;
+System altered.
+SYS@PROD1>select group#, sequence#, status from v$log;
+
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   10 ACTIVE   → 데이터버퍼캐쉬의 더티블록이 데이터파일에 내려써지고있는상태
+	 2	   11 CURRENT
+	 3	    9 INACTIVE
+
+한번더 반복해보자!!
+SYS@PROD1>update scott.dept set loc='JEJU' where deptno=20;
+SYS@PROD1>commit;
+Commit complete. 
+SYS@PROD1>alter system switch logfile;
+System altered.
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   10 INACTIVE
+	 2	   11 ACTIVE
+	 3	   12 CURRENT
+
+이때 데이터파일을 강제로 삭제해보자.
+rm $ORACLE_BASE/oradata/PROD1/users01.dbf
+
+강제로 재시작해보자.
+SYS@PROD1>startup force
+ORACLE instance started.
+
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 6 - see DBWR trace file
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+특정한 데이터파일이 없어졌다는 에러…
+SYS@PROD1>select status from v$instance;
+STATUS
+------------
+MOUNTED
+현재 상태는 마운트 단계
+
+복구를 해보자…
+백업받은걸로 해야겠지..
+[oracle@edydr1p1]$cp ~/backup/PROD1/users01.dbf /u01/app/oracle/oradata/PROD1/
+복구한 파일로 테이블스페이스를 복구하자.
+SYS@PROD1>recover tablespace users;
+Media recovery complete.
+SYS@PROD1>alter database open;
+Database altered.
+
+
+SYS@PROD1>select instance_name,status from v$instance;
+INSTANCE_NAME	 STATUS
+---------------- ------------
+PROD1		 OPEN
+
+복구되었음을 확인해보자.. 복구된걸 확인할수있다.
+SYS@PROD1>select * from scott.dept;
+    DEPTNO DNAME	  LOC
+---------- -------------- -------------
+	10 ACCOUNTING	  SEOUL
+	20 RESEARCH	  JEJU
+	30 SALES	  CHICAGO
+	40 OPERATIONS	  BOSTON
+
+
+테스트#2 : no arive log mode 에서 loss 가 발생했을때
+
+오라클을 셧다운, 파일백업하고
+SYS@PROD1>select * from scott.dept;
+    DEPTNO DNAME	  LOC
+---------- -------------- -------------
+	10 ACCOUNTING	  SEOUL
+	20 RESEARCH	  JEJU
+	30 SALES	  CHICAGO
+	40 OPERATIONS	  BOSTON
+
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   13 CURRENT
+	 2	   11 INACTIVE
+	 3	   12 INACTIVE
+
+첫번째...
+SYS@PROD1>update scott.dept set loc='NEW YORK' where deptno=10;
+SYS@PROD1>commit;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   13 ACTIVE
+	 2	   14 CURRENT
+	 3	   12 INACTIVE
+
+두번째…
+SYS@PROD1>update scott.dept set loc='NEW YORK' where deptno=10;
+SYS@PROD1>commit;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   13 ACTIVE
+	 2	   14 ACTIVE
+	 3	   15 CURRENT
+
+여기서 로그스위치를 한번 더 해보자.
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select group#, sequence#, status from v$log;
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   16 CURRENT
+	 2	   14 INACTIVE
+	 3	   15 INACTIVE
+
+자 이젠 13번 로그가 없는 상태이다...이제 강제로 user.dbf 를 지워보자.
+재시작 해보자.
+SYS@PROD1>startup force;
+ORACLE instance started.
+
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 6 - see DBWR trace file
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+SYS@PROD1>select instance_name,status from v$instance;
+INSTANCE_NAME	 STATUS
+---------------- ------------
+PROD1		 MOUNTED
+
+이제 복구해보자. 파일 복사.
+[oracle@edydr1p1 PROD1]$ cp ~/backup/PROD1/users01.dbf .
+
+테이블스페이스 복구를 해보자… 어 에러나네..
+SYS@PROD1>recover tablespace users;
+ORA-00279: change 1901029 generated at 06/15/2020 15:51:18 needed for thread 1
+ORA-00289: suggestion : /u01/app/oracle/product/12.1.0/dbhome_1/dbs/arch1_13_1043157458.dbf
+ORA-00280: change 1901029 for thread 1 is in sequence #13
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+이때 CANCEL 이라고 쳐보면
+CANCEL
+Media recovery cancelled.
+SYS@PROD1>
+
+데이터베이스 시작해볼까?.. 하지만 에러가 나고 안된다.
+SYS@PROD1>alter database open;
+alter database open
+*
+ERROR at line 1:
+ORA-01113: file 6 needs media recovery
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+
+어쩔수 없이 서버내리고 
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+
+백업받은 파일 모두 가져와서 복구하자.
+oracle@edydr1p1 PROD1]$ cp ~/backup/PROD1/* .
+
+SYS@PROD1>startup
+SYS@PROD1>select * from scott.dept;
+  DEPTNO DNAME	  LOC
+---------- -------------- -------------
+	10 ACCOUNTING	  SEOUL
+	20 RESEARCH	  JEJU
+	30 SALES	  CHICAGO
+	40 OPERATIONS	  BOSTON
+
+불완전 복구가 이루어졌다.
+
+
+참고로..백업은 왜 하나?
+물리적인 손실
+사용자의 논리적인 실수만회
+백업이후의 모든것을 가지고있자는것이 archive log mode 이다.
+
+# 테스트3 : 데이터파일이 하나 없어진다면 어떻게 처리할까?
+
+테이블 스페이스를 만들자.
+SYS@PROD1>create tablespace sal_tbs datafile '$ORACLE_BASE/oradata/PROD1/sal_tbs01.dbf' size 10M;
+
+데이터 파일 확인해보자.
+SYS@PROD1>select tablespace_name,file_name from dba_data_files;
+TABLESPACE_NAME 	       FILE_NAME
+------------------------------ 
+USERS			       /u01/app/oracle/oradata/PROD1/users01.dbf
+UNDOTBS1		       /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+SYSTEM			       /u01/app/oracle/oradata/PROD1/system01.dbf
+SYSAUX			       /u01/app/oracle/oradata/PROD1/sysaux01.dbf
+EXAMPLE 		       /u01/app/oracle/oradata/PROD1/example01.dbf
+SAL_TBS 		       /u01/app/oracle/oradata/PROD1/sal_tbs01.dbf
+
+디비를 끄고
+SYS@PROD1>shutdown immediate
+
+방금 만들었던 데이터 파일을 삭제해보자.
+[oracle@edydr1p1 PROD1]$ rm sal_tbs01.dbf 
+
+디비를 다시 시작해보자… 역시나 에러가 나네
+SYS@PROD1>startup
+ORACLE instance started.
+
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 2 - see DBWR trace file
+ORA-01110: data file 2: '/u01/app/oracle/oradata/PROD1/sal_tbs01.dbf'
+
+마운트 단계이네..
+다행히 저 테이블 스페이스에서 아무작업도 안했으니 과감히 날려보자.
+위에 노란색으로 data file 2 라고 되어있으니 저걸 지워보자.
+SYS@PROD1>alter database datafile 2 offline drop;
+Database altered.
+또는 숫자말고 파일의 경로를 직접 지정해줘도 된다.
+SYS@PROD1>alter database datafile '/u01/app/oracle/oradata/PROD1/sal_tbs01.dbf' offline drop;
+
+확인을 해보면...
+SYS@PROD1>select name, status from v$datafile;
+NAME							     STATUS
+------------------------------------------------------------ -------
+/u01/app/oracle/oradata/PROD1/system01.dbf		     SYSTEM
+/u01/app/oracle/oradata/PROD1/sal_tbs01.dbf		     OFFLINE
+/u01/app/oracle/oradata/PROD1/sysaux01.dbf		     ONLINE
+/u01/app/oracle/oradata/PROD1/undotbs01.dbf		     ONLINE
+/u01/app/oracle/oradata/PROD1/example01.dbf		     ONLINE
+/u01/app/oracle/oradata/PROD1/users01.dbf		     ONLINE
+
+이상태에서 오픈해보자.  
+SYS@PROD1>alter database open;
+Database altered.
+
+그리고 테이블스페이스를 삭제하자.
+SYS@PROD1>drop tablespace sal_tbs including contents and datafiles;
+Tablespace dropped.
+
+여기서 잠깐 딕셔너리에 대해 알아보자.
+데이터 딕셔너리 프리픽스에는  dba_  user_  all_ 가 있다.
+그런데 v$ 는 뭐냐? v$ 는 다이너믹 퍼포먼스 뷰이다.
+
+이건 복구라기보다는 그냥 오라클이 실행되도록 해주는 정도이다.
+
+#테스트4 :  데이터파일이 사라졌을때 리두로그정보로 복구해볼까
+
+리두로그 파일을 확인해보자.
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   13 INACTIVE
+	 2	   14 CURRENT
+	 3	   12 INACTIVE
+
+
+테이블 스페이스를 생성해보자. 자동증가 옵션 추가
+SYS@PROD1>create tablespace sal_tbs datafile '$ORACLE_BASE/oradata/PROD1/sal_tbs01.dbf' size 10M autoextend on segment space management auto;
+Tablespace created.
+
+테이블 스페이스를 확인해보자.
+SYS@PROD1>select tablespace_name, file_name from dba_data_files;
+TABLESPACE_NAME 	       FILE_NAME
+------------------------------ 
+USERS			       /u01/app/oracle/oradata/PROD1/users01.dbf
+UNDOTBS1		       /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+SYSTEM			       /u01/app/oracle/oradata/PROD1/system01.dbf
+SYSAUX			       /u01/app/oracle/oradata/PROD1/sysaux01.dbf
+EXAMPLE 		       /u01/app/oracle/oradata/PROD1/example01.dbf
+SAL_TBS 		       /u01/app/oracle/oradata/PROD1/sal_tbs01.dbf
+
+방금 만들어진 테이블 스페이스에다가 테이블 하나를 만들어보자. 
+SYS@PROD1>create table scott.s_emp(id number) tablespace sal_tbs;
+insert 해보자.
+SYS@PROD1>insert into scott.s_emp values (1);
+SYS@PROD1>commit;
+Commit complete. -> 리두로그버퍼의 내용이 리두로그파일에 내려써졌다는것
+
+이제 데이터파일을 지워보자.
+[oracle@edydr1p1 PROD1]$ rm sal_tbs01.dbf
+
+리두로그파일의 상태를 확인해보자.
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   13 INACTIVE
+	 2	   14 CURRENT
+	 3	   12 INACTIVE
+
+여기서 잠깐 짚고 넘어가면 데이터파일을 사라졌지만 변경사항은 리두로그파일에 남아있는 상태이다.
+
+SYS@PROD1>alter database datafile '$ORACLE_BASE/oradata/PROD1/sal_tbs01.dbf' offline drop;
+
+SYS@PROD1>select name,status from v$datafile;
+NAME							     STATUS
+------------------------------------------------------------ -------
+/u01/app/oracle/oradata/PROD1/system01.dbf		     SYSTEM
+/u01/app/oracle/oradata/PROD1/sal_tbs01.dbf		     RECOVER
+/u01/app/oracle/oradata/PROD1/sysaux01.dbf		     ONLINE
+/u01/app/oracle/oradata/PROD1/undotbs01.dbf		     ONLINE
+/u01/app/oracle/oradata/PROD1/example01.dbf		     ONLINE
+/u01/app/oracle/oradata/PROD1/users01.dbf		     ONLINE
+=> 드랍했던게 RECOVER 라고 뜨네...
+
+빈 데이터파일을 만들어보자.
+SYS@PROD1>alter database create datafile '$ORACLE_BASE/oradata/PROD1/sal_tbs01.dbf';
+자.. 이제 빈데이터 파일을 리두로그를 활용하여 복구해보자.
+SYS@PROD1>alter database recover datafile '$ORACLE_BASE/oradata/PROD1/sal_tbs01.dbf';
+Database altered.
+
+다시 확인해보면 OffLine 임을 알수있다. online 이어야 사용가능하다.
+SYS@PROD1>select name,status from v$datafile;
+NAME							     STATUS
+------------------------------------------------------------ -------
+/u01/app/oracle/oradata/PROD1/system01.dbf		     SYSTEM
+/u01/app/oracle/oradata/PROD1/sal_tbs01.dbf		     OFFLINE
+/u01/app/oracle/oradata/PROD1/sysaux01.dbf		     ONLINE
+
+online 으로 만들자.
+SYS@PROD1>alter database datafile '$ORACLE_BASE/oradata/PROD1/sal_tbs01.dbf' online;
+Database altered.
+
+데이터 확인해보자.
+SYS@PROD1>select * from scott.s_emp;
+	ID
+----------
+	 1
+
+
+
+#테스트5 : 디스크 디바이스 문제 발생 -> 새로운 디스크 디바이스생성
+이것은 완전복구는 불가능하다. 그냥 가장최근에 백업받은걸로 복구하는것이다.
+
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   13 INACTIVE
+	 2	   14 CURRENT
+	 3	   12 INACTIVE
+
+데이터 파일 목록 조회
+[oracle@edydr1p1 PROD1]$ ll
+total 3133116
+-rw-r----- 1 oracle oinstall   10043392 Jun 16 11:12 control01.ctl
+-rw-r----- 1 oracle oinstall 1304174592 Jun 16 10:38 example01.dbf
+-rw-r----- 1 oracle oinstall   52429312 Jun 16 10:38 redo01.log
+-rw-r----- 1 oracle oinstall   52429312 Jun 16 11:11 redo02.log
+-rw-r----- 1 oracle oinstall   52429312 Jun 16 10:38 redo03.log
+-rw-r----- 1 oracle oinstall   10493952 Jun 16 11:11 sal_tbs01.dbf
+-rw-r----- 1 oracle oinstall  723525632 Jun 16 11:10 sysaux01.dbf
+-rw-r----- 1 oracle oinstall  828383232 Jun 16 11:10 system01.dbf
+-rw-r----- 1 oracle oinstall  206577664 Jun 16 10:39 temp01.dbf
+-rw-r----- 1 oracle oinstall  162537472 Jun 16 11:10 undotbs01.dbf
+-rw-r----- 1 oracle oinstall    5251072 Jun 16 10:38 users01.dbf
+
+
+
+싹지워보자.  rm -f *
+체크포인트 ; 더티버퍼를 데이터파일로 내려써라..   
+SYS@PROD1>alter system checkpoint;
+alter system checkpoint
+*
+ERROR at line 1:
+ORA-03113: end-of-file on communication channel
+Process ID: 18975
+Session ID: 237 Serial number: 21103
+
+SYS@PROD1>exit
+[oracle@edydr1p1 ~]$ sqlplus / as sysdba
+SQL*Plus: Release 12.1.0.2.0 Production on Tue Jun 16 11:16:47 2020
+Copyright (c) 1982, 2014, Oracle.  All rights reserved.
+Connected to an idle instance. <= 서버가 내려갔네..
+
+새로운 디렉토리를 만들자.
+[oracle@edydr1p1 oradata]$ mkdir NEW_PROD1
+
+그리고 pfile 을 만들자.
+SYS@PROD1>create pfile='$ORACLE_BASE/oradata/NEW_PROD1/initNEW_PROD1.ora' from spfile;
+File created.
+
+[oracle@edydr1p1 NEW_PROD1]$ ll
+total 4
+-rw-r--r-- 1 oracle oinstall 858 Jun 16 11:18 initNEW_PROD1.ora
+
+pfile 을 열어서 고쳐보자. 음… 경로만 바꾸면 되겠네
+*.control_files='/u01/app/oracle/oradata/NEW_PROD1/control01.ctl'  
+왜 pfile 을 만들었는지 알겠군.. 이렇게 고치면되니깐 파일로 만든거네..
+
+그리고 어제 백업디렉토리에 있던 파일들을 새로운 경로에 복사해오자.
+그리고 pfile 로 start 해보자.
+
+디비를 내린후
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+
+pfile 로 다시 시작해보자.
+SYS@PROD1>startup pfile='$ORACLE_BASE/oradata/NEW_PROD1/initNEW_PROD1.ora';
+ORACLE instance started.
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 1 - see DBWR trace file
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+
+
+
+상태를 확인해보자.
+SYS@PROD1>select status from v$instance;
+STATUS
+------------
+MOUNTED
+
+컨트롤 파일의 경로를 확인해볼까나
+SYS@PROD1>show parameter control_files
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+control_files			     string	 /u01/app/oracle/oradata/NEW_PR
+						 OD1/control01.ctl
+컨트롤 파일
+SYS@PROD1>select name from v$controlfile;
+NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/NEW_PROD1/control01.ctl
+
+데이터파일
+SYS@PROD1>select name from v$datafile;
+NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/system01.dbf
+/u01/app/oracle/oradata/PROD1/sysaux01.dbf
+/u01/app/oracle/oradata/PROD1/undotbs01.dbf
+/u01/app/oracle/oradata/PROD1/example01.dbf
+/u01/app/oracle/oradata/PROD1/users01.dbf
+
+rename 시켜보자.
+alter database rename file ‘...’ to ‘...’ 이런식의 SQL 문을 만들어야하는데 자동으로 하려면 다음과 같은 쿼리를 만들면된다.
+select 'alter database rename file '
+||q'[']'
+||name
+||q'[']'
+||' to '
+||q'[']'
+||replace(name,'PROD1','NEW_PROD1')
+||q'[';]' as text
+from v$datafile;
+
+이 쿼리로 만들어진 SQL 문자열을 실행한다.
+
+리두로그 파일의 위치도 보자. 이것도 변경해야겠지
+SYS@PROD1>select member from v$logfile;
+MEMBER
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/redo03.log
+/u01/app/oracle/oradata/PROD1/redo02.log
+/u01/app/oracle/oradata/PROD1/redo01.log
+
+select 'alter database rename file '
+||q'[']'
+||member
+||q'[']'
+||' to '
+||q'[']'
+||replace(member,'PROD1','NEW_PROD1')
+||q'[';]' as text
+from v$logfile;
+
+
+
+템포러리 파일도 변경하자.
+SYS@PROD1>select name from v$tempfile;
+NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/temp01.dbf
+
+경로를 다 바꿨다. 이제 오픈하자.
+
+SYS@PROD1>alter database open;
+Database altered.
+
+pfile 을 spfile 로 변경해볼까나.. 
+근데 에러나네.. 
+SYS@PROD1>create spfile from pfile;
+create spfile from pfile
+*
+ERROR at line 1:
+ORA-01078: failure in processing system parameters
+LRM-00109: could not open parameter file '/u01/app/oracle/product/12.1.0/dbhome_1/dbs/initPROD1.ora'
+
+경로를 지정해주자..
+SYS@PROD1>create spfile from pfile='$ORACLE_BASE/oradata/NEW_PROD1/initNEW_PROD1.ora'
+File created.
+
+재시작해보자.
+spfile 을 확인해보자.
+SYS@PROD1>show parameter spfile
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+spfile				     string	 /u01/app/oracle/product/12.1.0
+						 /dbhome_1/dbs/spfilePROD1.ora
+
+
+
+리두로그버퍼는 체크포인트시에 내려써지고
+데이터버퍼캐시는 로그스위치할때 데이터파일에 내려써진다.
+
+리두로그버퍼의 주목적은 
+fast commit : 커밋을 날릴때마다 버퍼캐시에 기록하게 되면 I/O 가 너무 많이 발생하니깐 느려지는데 그렇게 하지 않고 리두로그만 관리하면 훨씬 빠른 커밋 (fast commit) 을 얻을수있다.
+recovery : 그리고 디비가 깨지더라도 리두로그파일을 통해 복구를 할수있다.
+
+
+CKPT : scn(system change number) 을 기록
+풀체크포인트 : 디비셧다운, 로그스위치 시에 발생
+인크리멘털 체크포인트 : 풀체크포인트시에 더티버퍼를 내려쓰는 양을 줄여주기위해 도입
+
+Archive Log Mode
+로그스위치가 일어날때 ARCn 이 리두로그파일을 백업한다.
+온라인 리두로그파일 : LGWR 가 만든 리두로그파일
+오프라인 리두로그파일 : ARCn 이 백업받은 리두로그파일
+운영모드를 바꿀수있는 시점은 MOUNT 단계
+운영모드를 바꿀때 꼭 해줘야할것은 백업을 해두어야 한다.
+
+콜드백업을 받게되면 기존의 아카이브는 쓸모가 없으니 지워도된다.
+
+Instance Recovery 
+Roll Forward : 마운트 단계에서 롤포워드가 진행 ( 커밋된것과 안된것 모두 포함 )
+fast_start_mttr_target 파라미터를 조정함으로써 체크포인트 시간간격을 조정하여 RollForward  시간을 줄여준다. 하지만 체크포인트발생하는것 자체가 시스템에 부하를 준다는걸 알아야한다.
+Roll Back : 오픈단계에서 서버프로세스에서 롤백이 진행
+
+
+Complete Recovery : 손상시점까지 복원
+Incomplete Recovery : 사용자의실수등으로 인해 특정시점으로 복원
+
+# Recovery 의 확률을 높이기위한 Redundancy 증가
+Multiplexing
+DB 운영모드 설정 ( archive log mode )
+정기적백업
+
+1-1) Multiplexing : 컨트롤파일
+
+SYS@PROD1>show parameter control_file
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+control_file_record_keep_time	     integer	 7
+control_files			     string	 /u01/app/oracle/oradata/PROD1/
+						 control01.ctl
+
+컨트롤 파일이 1개였는데 3개로 늘리자..
+
+SYS@PROD1>alter system set control_files =
+'/u01/app/oracle/oradata/PROD1/control01.ctl',
+'/u01/app/oracle/oradata/PROD1/control02.ctl',
+'/u01/app/oracle/oradata/PROD1/control03.ctl' 
+scope=spfile;
+(참고로 scope = spfile, both, memory  세가지의 옵션이 있다)
+
+해당디렉토리에서 파일확인해봤지만 아직은 control01.ctl 뿐이다. 껐다 켜자~!
+SYS@PROD1>shutdown immediate
+SYS@PROD1>startup
+ORA-00205: error in identifying control file, check alert log for more info
+
+이때 alert log 를 확인해보면
+ORA-00210: cannot open the specified control file
+ORA-00202: control file: '/u01/app/oracle/oradata/PROD1/control03.ctl'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+ORA-00210: cannot open the specified control file
+ORA-00202: control file: '/u01/app/oracle/oradata/PROD1/control02.ctl'
+
+
+디비 상태를 확인해보니 started 단계네..
+SYS@PROD1>select status from v$instance;
+STATUS
+------------
+STARTED
+
+컨트롤 파일을 복사해보자.
+[oracle@edydr1p1 PROD1]$ cp control01.ctl control02.ctl
+[oracle@edydr1p1 PROD1]$ cp control01.ctl control03.ctl
+
+재시작하자..  성공적으로 시작됐다. 컨트롤 파일 확인해보자.
+SYS@PROD1>select name from v$controlfile;
+NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/control01.ctl
+/u01/app/oracle/oradata/PROD1/control02.ctl
+/u01/app/oracle/oradata/PROD1/control03.ctl
+
+
+그럼 pfile 을 만들어서 그안의 내용을 확인해보자.
+SYS@PROD1>create pfile from spfile;
+File created.
+[oracle@edydr1p1 dbs]$ vi $ORACLE_HOME/dbs/initPROD1.ora
+*.control_files='/u01/app/oracle/oradata/PROD1/control01.ctl','/u01/app/oracle/oradata/PROD1/control02.ctl','/u01/app/oracle/oradata/PROD1/control03.ctl'
+
+컨트롤파일이 3개로 설정되어있는게 확인이 된다.
+(참고, 실제로는 같은디렉토리에 컨트롤파일을 위치시키지 않는다.)
+
+
+컨트롤 파일에 기록하는놈은 누구인가? CKPT
+
+1-2) Multiplexing : 리두로그 파일
+
+SYS@PROD1>select sequence#, bytes, members, status, archived from v$log;
+ SEQUENCE#	BYTES	 MEMBERS STATUS 	  ARC
+---------- ---------- ---------- ---------------- ---
+	19   52428800	       1 CURRENT	  NO
+	17   52428800	       1 INACTIVE	  NO
+	18   52428800	       1 INACTIVE	  NO
+
+SYS@PROD1>select group#, member, status from v$logfile order by 1;
+    GROUP# MEMBER							STATUS
+---------- ------------------------------------------------------------ -------
+	 1 /u01/app/oracle/oradata/PROD1/redo01.log
+	 2 /u01/app/oracle/oradata/PROD1/redo02.log
+	 3 /u01/app/oracle/oradata/PROD1/redo03.log
+
+리두로그파일이 3개가 있고 순환되어서 기록되는 상황이다.
+각 group 에 member 를 추가하자.
+SYS@PROD1>alter database add logfile member
+'$ORACLE_BASE/oradata/PROD1/redo01a.log' to group 1,
+'$ORACLE_BASE/oradata/PROD1/redo02a.log' to group 2,
+'$ORACLE_BASE/oradata/PROD1/redo03a.log' to group 3;
+
+SYS@PROD1>select group#, member, status from v$logfile order by 2;
+    GROUP# MEMBER							STATUS
+---------- ------------------------------------------------------------ -------
+	 1 /u01/app/oracle/oradata/PROD1/redo01.log
+	 1 /u01/app/oracle/oradata/PROD1/redo01a.log			INVALID
+	 2 /u01/app/oracle/oradata/PROD1/redo02.log
+	 2 /u01/app/oracle/oradata/PROD1/redo02a.log			INVALID
+	 3 /u01/app/oracle/oradata/PROD1/redo03.log
+	 3 /u01/app/oracle/oradata/PROD1/redo03a.log			INVALID
+
+INVALID 라고 되어있는건 한번도 쓴적이 없다는것이다.
+
+이번에는 group 을 추가해보자.
+SYS@PROD1>alter database add logfile group 4 '$ORACLE_BASE/oradata/PROD1/redo4.log' size 50M;
+SYS@PROD1>select group#, member, status from v$logfile order by 2;
+    GROUP# MEMBER							STATUS
+---------- ------------------------------------------------------------ -------
+	 1 /u01/app/oracle/oradata/PROD1/redo01.log
+	 1 /u01/app/oracle/oradata/PROD1/redo01a.log			INVALID
+	 2 /u01/app/oracle/oradata/PROD1/redo02.log
+	 2 /u01/app/oracle/oradata/PROD1/redo02a.log			INVALID
+	 3 /u01/app/oracle/oradata/PROD1/redo03.log
+	 3 /u01/app/oracle/oradata/PROD1/redo03a.log			INVALID
+	 4 /u01/app/oracle/oradata/PROD1/redo4.log
+
+
+SYS@PROD1>select group#, sequence#, bytes, members, status , archived from v$log;
+    GROUP#  SEQUENCE#	   BYTES    MEMBERS STATUS	     ARC
+---------- ---------- ---------- ---------- ---------------- ---
+	 1	   19	52428800	  2 CURRENT	     NO
+	 2	   17	52428800	  2 INACTIVE	     NO
+	 3	   18	52428800	  2 INACTIVE	     NO
+	 4	    0	52428800	  1 UNUSED	     YES
+
+새로생긴 group 은 시퀀스가 0 이고 상태도 unused
+
+로그스위치를 발생시키자.
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select group#, sequence#, bytes, members, status , archived from v$log;
+    GROUP#  SEQUENCE#	   BYTES    MEMBERS STATUS	     ARC
+---------- ---------- ---------- ---------- ---------------- ---
+	 1	   19	52428800	  2 ACTIVE	     NO
+	 2	   17	52428800	  2 INACTIVE	     NO
+	 3	   18	52428800	  2 INACTIVE	     NO
+	 4	   20	52428800	  1 CURRENT	     NO
+
+퀴즈 4번 그룹만 멤버가 한명인데 한명 두 추가해보자.
+SYS@PROD1>alter database add logfile member '$ORACLE_BASE/oradata/PROD1/redo04a.log' to group 4;
+
+로그스위치 네다섯번정도 하면 INVALID 한 애들이 사라진다.
+SYS@PROD1>alter system switch log file;
+
+이제 리두로그 멤버를 지워보자. 주의할건 현재 current 인건 지울수 없다.
+SYS@PROD1>alter database drop logfile member '/u01/app/oracle/oradata/PROD1/redo01a.log';
+SYS@PROD1>alter database drop logfile member '/u01/app/oracle/oradata/PROD1/redo02a.log';
+SYS@PROD1>alter database drop logfile member '/u01/app/oracle/oradata/PROD1/redo03a.log';
+SYS@PROD1>alter database drop logfile member '/u01/app/oracle/oradata/PROD1/redo03.log';
+alter database drop logfile member '/u01/app/oracle/oradata/PROD1/redo03.log'
+*
+ERROR at line 1:
+ORA-00361: cannot remove last log member /u01/app/oracle/oradata/PROD1/redo03.log for group 3
+=> 마지막 멤버는 지우지 말아줘  ( 즉 같은 Group 에 있는 마지막 멤버는 못 지운다 )
+
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   23 INACTIVE
+	 2	   25 CURRENT
+	 3	   22 INACTIVE
+	 4	   24 ACTIVE
+
+Active 그룹을 지워보자.
+SYS@PROD1>alter database drop logfile group 4;
+alter database drop logfile group 4
+*
+ERROR at line 1:
+ORA-01624: log 4 needed for crash recovery of instance PROD1 (thread 1)
+ORA-00312: online log 4 thread 1: '/u01/app/oracle/oradata/PROD1/redo4.log'
+ORA-00312: online log 4 thread 1: '/u01/app/oracle/oradata/PROD1/redo04a.log'
+
+Active 그룹은 지워지지 않는다. 
+하지만 조금 지나면 4번 Group 이 INACTIVE 가 되었고 삭제할수있었다.
+
+Current 그룹을 지워보자.
+SYS@PROD1>alter database drop logfile group 2;
+alter database drop logfile group 2
+*
+ERROR at line 1:
+ORA-01623: log 2 is current log for instance PROD1 (thread 1) - cannot drop
+ORA-00312: online log 2 thread 1: '/u01/app/oracle/oradata/PROD1/redo02.log'
+
+
+
+# DB 운영모드 변경
+
+SYS@PROD1>archive log list
+Database log mode	       No Archive Mode
+Automatic archival	       Disabled
+Archive destination	       /u01/app/oracle/product/12.1.0/dbhome_1/dbs/arch
+Oldest online log sequence     22
+Current log sequence	       25
+
+디렉토리 두개 만들자. 홈디렉토리(/home/oracle) 아래에 
+[oracle@edydr1p1 ~]$ mkdir arch1
+[oracle@edydr1p1 ~]$ mkdir arch2
+
+SYS@PROD1>alter system set log_archive_dest_1="location=/home/oracle/arch1 mandatory" scope=spfile;
+SYS@PROD1>alter system set log_archive_dest_2="location=/home/oracle/arch2 mandatory" scope=spfile;
+SYS@PROD1>alter system set log_archive_format='arch_%t_%s_%r.arc' scope=spfile;
+
+DB 운영모드를 변경해야하므로 마운트 단계로 전환
+SYS@PROD1>shutdown immediate
+SYS@PROD1>startup mount
+SYS@PROD1>alter database archivelog; -- 아카이브 로그 모드로 변경한다.
+SYS@PROD1>archive log list; -- 확인한다.
+Database log mode	       Archive Mode
+Automatic archival	       Enabled
+Archive destination	       /home/oracle/arch2
+Oldest online log sequence     22
+Next log sequence to archive   25
+Current log sequence	       25
+
+SYS@PROD1>alter database open  ;   -- 데이터베이스를 오픈하고 
+SYS@PROD1>alter system switch logfile;  -- 로그스위치를 일으키면
+
+디렉토리에 아카이브 파일이 생성되어있는것을 확인할수있다.
+[oracle@edydr1p1 arch1]$ ll
+-rw-r----- 1 oracle oinstall 1974272 Jun 17 15:36 arch_1_25_1043157458.arc
+
+SYS@PROD1>select group#, sequence#, bytes, members, status , archived from v$log;
+    GROUP#  SEQUENCE#	   BYTES    MEMBERS STATUS	     ARC
+---------- ---------- ---------- ---------- ---------------- ---
+	 1	   23	52428800	  1 INACTIVE	     YES
+	 2	   25	52428800	  1 ACTIVE	     YES
+	 3	   26	52428800	  1 CURRENT	     NO
+
+SYS@PROD1>alter system archive log current; --현재 CURRENT 를 아카이빙해라
+SYS@PROD1>select group#, sequence#, bytes, members, status , archived from v$log;
+    GROUP#  SEQUENCE#	   BYTES    MEMBERS STATUS	     ARC
+---------- ---------- ---------- ---------- ---------------- ---
+	 1	   27	52428800	  1 CURRENT	     NO
+	 2	   25	52428800	  1 ACTIVE	     YES
+	 3	   26	52428800	  1 ACTIVE	     YES
+
+파일이 한개더 생성됬다.
+[oracle@edydr1p1 arch1]$ ll
+total 1960
+-rw-r----- 1 oracle oinstall 1974272 Jun 17 15:36 arch_1_25_1043157458.arc
+-rw-r----- 1 oracle oinstall   29696 Jun 17 15:40 arch_1_26_1043157458.arc
+
+SYS@PROD1>select * from v$log_history;
+
+
+# Archive Log Mode 에서 Backup 을 받아보자.
+
+백업할 디렉토리를 만들자. 핫백업용 & 콜드백업용
+[oracle@edydr1p1 ~]$ mkdir -p backup/arch/hotBU_1    -- 핫백업용
+[oracle@edydr1p1 ~]$ mkdir -p backup/arch/coldBU_1   -- 콜드백업용
+
+SYS@PROD1>select tablespace_name,logging from dba_tablespaces;
+TABLESPACE_NAME 	       LOGGING
+------------------------------ ---------
+SYSTEM			       LOGGING
+SYSAUX			       LOGGING
+UNDOTBS1		       LOGGING
+TEMP			       NOLOGGING
+USERS			       LOGGING
+EXAMPLE 		       NOLOGGING
+
+Logging 과 NoLogging 의 차이는 무엇인가?
+빈공간을 찾을때 HWM 를 기준으로 찾는다.
+MSSM 방식일때는 HWM 에 기반한 빈공간을 찾아서 넣는다.
+ASSM  방식에서는 비트맵 공간을 활용해서 넣는다.
+그런데 대량의 데이터를 넣을때는 일일이 빈공간을 찾아 넣으면 느려진다.
+
+Logging 을 한다는건 Recovery 를 하겠다는거다.
+temp tablespace 는 주로 sort 를 목적으로 하는것이기 때문에 리커버리의 대상이 아니다.
+
+
+Example 테이블 스페이스는 Logging 으로 변경해보자.
+SYS@PROD1>alter tablespace example logging;
+Tablespace altered.
+
+[ 콜드백업 ]
+백업명령어를 만들어보자.  컨트롤파일, 로그파일, 데이터파일, 템프파일에 대해
+SYS@PROD1>
+select 'cp ' || name || ' ~/backup/arch/coldBU_1/' from v$controlfile
+union all
+select 'cp ' || name || ' ~/backup/arch/coldBU_1/' from v$datafile
+union all
+select 'cp ' || member || ' ~/backup/arch/coldBU_1/' from v$logfile
+union all
+select 'cp ' || name || ' ~/backup/arch/coldBU_1/' from v$tempfile
+
+
+디비를 끄고 콜드백업을 하자. 위에서 만들어진 명령어를 쉘에서 실행한다.
+
+[ 핫백업 ]
+SYS@PROD1>select a.file#, a.name, a.checkpoint_change#, b.status, b.change#, b.time 
+from v$datafile a, v$backup b
+where a.file#=b.file#;
+     FILE# NAME 							CHECKPOINT_CHANGE# STATUS		 CHANGE# TIME
+---------- ------------------------------------------------------------ ------------------ ------------------ ---------- ---------
+	 1 /u01/app/oracle/oradata/PROD1/system01.dbf				   2262526 NOT ACTIVE		       0
+	 3 /u01/app/oracle/oradata/PROD1/sysaux01.dbf				   2262526 NOT ACTIVE		       0
+	 4 /u01/app/oracle/oradata/PROD1/undotbs01.dbf				   2262526 NOT ACTIVE		       0
+	 5 /u01/app/oracle/oradata/PROD1/example01.dbf				   2262526 NOT ACTIVE		       0
+	 6 /u01/app/oracle/oradata/PROD1/users01.dbf				   2262526 NOT ACTIVE		       0
+
+백업명령어실행
+SYS@PROD1>select 'cp  '||name||' ~/backup/arch/hotBU_1/' from v$datafile
+  2  union all
+  3  select 'cp '||name||' ~/backup/arch/hotBU_1/' from v$tempfile;
+
+'CP'||NAME||'~/BACKUP/ARCH/HOTBU_1/'
+cp  /u01/app/oracle/oradata/PROD1/system01.dbf ~/backup/arch/hotBU_1/
+cp  /u01/app/oracle/oradata/PROD1/sysaux01.dbf ~/backup/arch/hotBU_1/
+cp  /u01/app/oracle/oradata/PROD1/undotbs01.dbf ~/backup/arch/hotBU_1/
+cp  /u01/app/oracle/oradata/PROD1/example01.dbf ~/backup/arch/hotBU_1/
+cp  /u01/app/oracle/oradata/PROD1/users01.dbf ~/backup/arch/hotBU_1/
+cp /u01/app/oracle/oradata/PROD1/temp01.dbf ~/backup/arch/hotBU_1/
+
+
+온라인 백업 시작한다. ( 이건 No Archive Log Mode 에서는 안된다. )
+SYS@PROD1>alter database begin backup;
+지금부터는 파일을 복사할수있는 시점이 된다. 이때 쉘에서 복사명령어를 내리자.
+
+SYS@PROD1>select a.file#, a.name, b.status
+from v$datafile a, v$backup b where a.file#=b.file#;
+     FILE# NAME 							STATUS
+---------- ------------------------------------------------------------ 
+	 1 /u01/app/oracle/oradata/PROD1/system01.dbf			ACTIVE
+	 3 /u01/app/oracle/oradata/PROD1/sysaux01.dbf			ACTIVE
+	 4 /u01/app/oracle/oradata/PROD1/undotbs01.dbf			ACTIVE
+	 5 /u01/app/oracle/oradata/PROD1/example01.dbf			ACTIVE
+	 6 /u01/app/oracle/oradata/PROD1/users01.dbf			ACTIVE
+
+백업중이라 ACTIVE 가 되었다.
+
+복사가 끝나면 다음과 같이 한다.
+SYS@PROD1>alter database end backup;
+Database altered.
+
+SYS@PROD1>select a.file#, a.name, b.status
+from v$datafile a, v$backup b where a.file#=b.file#;
+     FILE# NAME 							STATUS
+---------- ------------------------------------------------------------ 
+	 1 /u01/app/oracle/oradata/PROD1/system01.dbf			NOT ACTIVE
+	 3 /u01/app/oracle/oradata/PROD1/sysaux01.dbf			NOT ACTIVE
+	 4 /u01/app/oracle/oradata/PROD1/undotbs01.dbf			NOT ACTIVE
+	 5 /u01/app/oracle/oradata/PROD1/example01.dbf			NOT ACTIVE
+	 6 /u01/app/oracle/oradata/PROD1/users01.dbf			NOT ACTIVE
+
+백업이 끝났으니 NOT ACTIVE 가 되었다.
+
+로그스위치
+SYS@PROD1>alter system archive log current;
+System altered.
+
+
+
+이제 장애를 발생시키고 복원을 해보자!!
+
+SYS@PROD1>shutdown immediate  -- 종료하고 
+
+[oracle@edydr1p1 PROD1]$ rm system01.dbf -- 데이터파일을 삭제하자. ( 장애 발생 )
+
+디비 시작하자.
+SYS@PROD1>startup
+ORACLE instance started.
+
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 1 - see DBWR trace file
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+=> 마운트 단계까지 갔는데 데이터파일이 없어서 에러가 났네..
+
+복구가 필요한 파일 확인하는 법
+SYS@PROD1>select * from v$recover_file;
+     FILE# ONLINE  ONLINE_ ERROR								CHANGE# TIME	      CON_ID
+---------- ------- ------- 
+	 1 ONLINE  ONLINE  FILE NOT FOUND							      0 	   0
+
+
+핫백업했던거로 파일을 복구해보자.
+[oracle@edydr1p1 hotBU_1]$ cp system01.dbf /u01/app/oracle/oradata/PROD1/
+
+다시 확인하면 에러메세지가 없어졌다.
+SYS@PROD1>select * from v$recover_file;
+     FILE# ONLINE  ONLINE_ ERROR								CHANGE# TIME	      CON_ID
+---------- ------- ------- 
+	 1 ONLINE  ONLINE									2264749 18-JUN-20	   0
+
+복구하고 , 오픈한다.
+SYS@PROD1>recover tablespace system;
+Media recovery complete.
+SYS@PROD1>alter database open;
+
+이것도 확인해보자.
+SYS@PROD1>select group#, sequence#, members, archived, status from v$log;
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS
+---------- ---------- ---------- --- ----------------
+	 1	   27	       1 YES INACTIVE
+	 2	   28	       1 YES INACTIVE
+	 3	   29	       1 NO  CURRENT
+
+아카이빙은 Current 아닌녀석들에 대해서 일어난다.
+SYS@PROD1>select sequence#, name from v$archived_log;
+ SEQUENCE# NAME
+---------- ------------------------------------------------------------
+	25 /home/oracle/arch1/arch_1_25_1043157458.arc
+	25 /home/oracle/arch2/arch_1_25_1043157458.arc
+	26 /home/oracle/arch1/arch_1_26_1043157458.arc
+	26 /home/oracle/arch2/arch_1_26_1043157458.arc
+	27 /home/oracle/arch1/arch_1_27_1043157458.arc
+	27 /home/oracle/arch2/arch_1_27_1043157458.arc
+	28 /home/oracle/arch1/arch_1_28_1043157458.arc
+	28 /home/oracle/arch2/arch_1_28_1043157458.arc
+
+users 테이블 스페이스에 테이블 하나 만들어보자.
+SYS@PROD1>create table scott.test1 (id number) tablespace users;
+Table created.
+SYS@PROD1>insert into scott.test1 values (100);
+1 row created.
+SYS@PROD1>commit;
+Commit complete.
+
+아직 current 에 있네
+
+
+
+데이터 파일 users01.dbf 을 지우자.
+[oracle@edydr1p1 PROD1]$ rm users01.dbf 
+
+새로운 테이블을 하나더 만들어보자. 당연히 에러가 나겄지
+SYS@PROD1>create table scott.test2 tablespace users as select * from hr.employees;
+create table scott.test2 tablespace users as select * from hr.employees
+                                                              *
+ERROR at line 1:
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+ORA-01116: error in opening database file 6
+ORA-27041: unable to open file
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+SYS@PROD1>select a.file#, b.name, a.status from v$datafile a , v$tablespace b where a.ts# = b.ts#;
+     FILE# NAME 			  STATUS
+---------- ------------------------------ -------
+	 1 SYSTEM			  SYSTEM
+	 3 SYSAUX			  ONLINE
+	 4 UNDOTBS1			  ONLINE
+	 5 EXAMPLE			  ONLINE
+	 6 USERS			  ONLINE
+지웠는데 아직 ONLINE 으로 되어있네..
+오프라인으로 바꾸자.
+SYS@PROD1>alter tablespace users offline immediate;
+Tablespace altered.
+
+SYS@PROD1>select a.file#, b.name, a.status from v$datafile a , v$tablespace b where a.ts# = b.ts#;
+     FILE# NAME 			  STATUS
+---------- ------------------------------ -------
+	 1 SYSTEM			  SYSTEM
+	 3 SYSAUX			  ONLINE
+	 4 UNDOTBS1			  ONLINE
+	 5 EXAMPLE			  ONLINE
+	 6 USERS			  RECOVER
+리커버리가 필요한 상태로 표시가 된다.
+
+핫백업했던 디렉토리로부터 복구를 해보자.
+[oracle@edydr1p1 PROD1]$ cp ~/backup/arch/hotBU_1/users01.dbf .
+
+SYS@PROD1>recover tablespace users;
+Media recovery complete.
+
+SYS@PROD1>alter tablespace users online;
+Tablespace altered.
+
+복구완료!!
+
+그렇다면 오래된 users01.dbf 로 복구를 했다면 어떻게 될까..
+SYS@PROD1>recover tablespace users;
+ORA-00279: change 1901029 generated at 06/15/2020 15:51:18 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_13_1043157458.arc
+ORA-00280: change 1901029 for thread 1 is in sequence #13
+이런 에러가 나네..
+
+
+# 백업이 없는 데이터파일이 날라가면 ( 아카이브로그 모드 )
+핫백업을 다 받고, 새로운 테이블스페이스를 생성하고 데이터넣고, 근데 어쩌다 보니
+그 데이터파일이 날라갔어.. 그러면 어떻게 복구할까?
+이시나리오의 핵심은 빈데이터파일을 만드는것
+alter database create datafile ...
+
+시나리오 시작..
+핫백업이후에 새로운 테이블 스페이스를 만든다.
+SYS@PROD1>create tablespace data01 datafile '$ORACLE_BASE/oradata/PROD1/data01.dbf' size 5M
+  2  extent management local uniform size 64k segment space management auto;
+Tablespace created.
+
+테이블을 만들고 데이터도 넣고 커밋하고 로그스위치 여러번 일으킨다.
+SYS@PROD1>create table scott.emp_temp tablespace data01 as select * from hr.employees;
+
+이때 데이터파일을 삭제한다.
+데이터 파일이 없더라도 업데이트 커밋등은 데이터 버퍼캐시에서 수행되므로 에러가 발생하지 않는다.
+SYS@PROD1>update scott.emp_temp set salary=60000 ;
+SYS@PROD1>commit;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+*
+ERROR at line 1:
+ORA-03113: end-of-file on communication channel
+Process ID: 3204
+Session ID: 237 Serial number: 57374
+이때 에러가 나서 연결이 끊어진다.
+로그스위치가 여러번 일어나다보면 데이터버퍼캐시의 내용을 데이터 파일에 기록해야하는데
+데이터 파일이 존재하지 않으니 에러가 나면서 세션도 끊어진다.
+
+SYS@PROD1>alter tablespace data01 offline immediate;
+ERROR:
+ORA-03114: not connected to ORACLE
+이미 연결이 끊어져서 명령이 먹히지 않는다.
+
+접속해서 startup 해보자. 그러면 데이터 파일이 없다고 에러가 나면서 MOUNT 단계에서 멈춘다.
+ERROR at line 1:
+ORA-01157: cannot identify/lock data file 2 - see DBWR trace file
+ORA-01110: data file 2: '/u01/app/oracle/oradata/PROD1/data01.dbf'
+
+이때 테이블 스페이스를 offline 으로 만들고 싶은데
+SYS@PROD1>alter tablespace data01 offline immediate;
+alter tablespace data01 offline immediate
+*
+ERROR at line 1:
+ORA-01109: database not open
+마운트 상태라서 이 명령어는 먹히지 않는다.
+
+아래의 명령어로 빈 데이터파일을 만들수있다.
+SYS@PROD1>alter database create datafile '$ORACLE_BASE/oradata/PROD1/data01.dbf';
+Database altered.
+
+참고로 아무 데이터파일이나 만들면 에러난다.
+SYS@PROD1>alter database create datafile '$ORACLE_BASE/oradata/PROD1/data02.dbf';
+alter database create datafile '$ORACLE_BASE/oradata/PROD1/data02.dbf'
+*
+ERROR at line 1:
+ORA-01516: nonexistent log file, data file, or temporary file "$ORACLE_BASE/oradata/PROD1/data02.dbf"
+
+
+그리고 복구를 하자.
+SYS@PROD1>recover tablespace data01;
+Media recovery complete.
+
+복구완료..
+
+
+
+# 테이블스페이스의 일부데이터파일이 날라간경우 ( 아카이브모드 & 백업없음 )
+
+SYS@PROD1>alter tablespace data01 add datafile '$ORACLE_BASE/oradata/PROD1/data02.dbf' size 10M;
+
+SYS@PROD1>select tablespace_name,file_name from dba_data_files;
+TABLESPACE_NAME 	       FILE_NAME
+------------------------------ 
+DATA01			       /u01/app/oracle/oradata/PROD1/data01.dbf
+DATA01			       /u01/app/oracle/oradata/PROD1/data02.dbf
+
+emp_temp 테이블에 엄청 데이터를 집어넣자. 아래의 쿼리를 반복..
+SYS@PROD1>insert into scott.emp_temp select * from scott.emp_temp;
+
+데이터파일에 데이터가 얼마나 찼는지 확인
+SYS@PROD1>select f.file_name,count(*) cnt from dba_extents e, dba_data_files f where e.file_id=f.file_id and e.segment_name='EMP_TEMP' group by f.file_name;
+FILE_NAME							    CNT
+------------------------------------------------------------ ----------
+/u01/app/oracle/oradata/PROD1/data02.dbf			    144
+/u01/app/oracle/oradata/PROD1/data01.dbf			     64
+
+
+
+
+핫백업을 받아보자. 이번에는 data01 테이블 스페이스만 받자.
+SYS@PROD1>alter tablespace data01 begin backup;
+이때 data01.dbf 와 data02.dbf 를 OS 에서 파일복사로 백업한다.
+SYS@PROD1>alter tablespace data01 end backup;
+
+자 여기서 data01.dbf 를 지운다.
+
+그리고 새로운 테이블을 만든다.
+SYS@PROD1>create table hr.test01 tablespace data01 as select * from hr.employees;
+
+밥먹고 돌아오니 접속이 끊어져있음, 재접속하니 서버는 내려가있네.. 서버를 시작해보자.
+SYS@PROD1>startup
+ORACLE instance started.
+...
+Database mounted.
+ORA-01157: cannot identify/lock data file 2 - see DBWR trace file
+ORA-01110: data file 2: '/u01/app/oracle/oradata/PROD1/data01.dbf'
+
+백업받았던 data01.dbf 파일을 복사해온다.
+그리고 테이블스페이스 복구
+SYS@PROD1>recover tablespace data01;
+SYS@PROD1>alter database open;
+복구완료…
+
+
+그런데 만약 data01.dbf 를 지우고 파일을 복구해올수 없다라고 가정한다면
+다음과 같이 할수있다.
+SYS@PROD1>alter database create datafile '$ORACLE_BASE/oradata/PROD1/data01.dbf';
+Database altered.
+
+SYS@PROD1>recover tablespace data01;
+ORA-00279: change 2397551 generated at 06/19/2020 11:03:20 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_30_1043157458.arc
+ORA-00280: change 2397551 for thread 1 is in sequence #30
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+여기서 AUTO 를 치면 아래와 같이 복구를 진행한다.
+
+ORA-00279: change 2397666 generated at 06/19/2020 11:04:46 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_31_1043157458.arc
+ORA-00280: change 2397666 for thread 1 is in sequence #31
+
+ORA-00279: change 2397813 generated at 06/19/2020 11:07:37 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_32_1043157458.arc
+ORA-00280: change 2397813 for thread 1 is in sequence #32
+
+ORA-00279: change 2597816 generated at 06/19/2020 11:28:55 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_33_1043157458.arc
+ORA-00280: change 2597816 for thread 1 is in sequence #33
+
+
+ORA-00279: change 2604214 generated at 06/19/2020 13:12:48 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_34_1043157458.arc
+ORA-00280: change 2604214 for thread 1 is in sequence #34
+
+Log applied.
+Media recovery complete.
+SYS@PROD1>alter database open;
+Database altered.
+이렇게도 복구가 되는걸 볼수있다.
+
+
+# 아카이브파일을 지운다면 ( 실패 )
+
+아카이브 로그를 지우더라도 리두로그버퍼가 존재한다면 복구가능하다는 컨셉
+
+참고) 아카이브는 오프라인 리두로그 파일이라고 한다.
+
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   36 INACTIVE
+	 2	   37 INACTIVE
+	 3	   38 CURRENT
+현재 리두로그 시퀀스가 38번인걸 확인한다.
+
+테이블을 만들자.
+SYS@PROD1>create table hr.tmp_1 tablespace users  as select * from hr.employees;
+
+로그스위치
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   39 ACTIVE
+	 2	   40 CURRENT
+	 3	   38 ACTIVE
+
+아카이브 로그를 보면 현재 40번을 제외한 39번까지 존재하는걸 볼수있다.
+SYS@PROD1>select sequence#, name from v$archived_log;
+ SEQUENCE# NAME
+---------- --------------------------------------------------
+...
+	37 /home/oracle/arch1/arch_1_37_1043157458.arc
+	37 /home/oracle/arch2/arch_1_37_1043157458.arc
+	38 /home/oracle/arch1/arch_1_38_1043157458.arc
+	38 /home/oracle/arch2/arch_1_38_1043157458.arc
+	39 /home/oracle/arch1/arch_1_39_1043157458.arc
+	39 /home/oracle/arch2/arch_1_39_1043157458.arc
+
+
+
+
+
+테이블 하나만들자.
+SYS@PROD1>create table hr.tmp_2 tablespace users as select * from hr.departments;
+Table created.
+
+이렇게 하면 현재 시퀀스를 바로 아카이빙 할수있다.
+SYS@PROD1>alter system archive log current;
+
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   42 ACTIVE
+	 2	   43 CURRENT
+	 3	   41 INACTIVE
+
+38 ~ 43 번까지 시퀀스가 진행이 되었다.
+그리고 그동안 만든테이블에 대한 데이터파일은 다음과 같이 조회할수있다.
+SYS@PROD1>select f.file_name from dba_extents e, dba_data_files f where e.file_id=f.file_id and e.segment_name in ('TMP_1','TMP_2');
+FILE_NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/users01.dbf
+/u01/app/oracle/oradata/PROD1/users01.dbf
+
+서버내리고 아카이브 파일이랑 user01.dbf 지우자.
+rm -f /home/oracle/arch1/arch_1_38_1043157458.arc
+rm -f /home/oracle/arch2/arch_1_38_1043157458.arc
+...
+rm -f /home/oracle/arch1/arch_1_43_1043157458.arc
+rm -f /home/oracle/arch2/arch_1_43_1043157458.arc
+( 헉… 리두로그 버퍼그룹이 3개니 마지막 2개만 지워야하는데 너무많이 지워서 복구가 안되겠네 )
+
+서버를 다시 띄우자.
+SYS@PROD1>startup
+ORACLE instance started.
+
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 6 - see DBWR trace file
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+데이터 파일을 오프라인 
+SYS@PROD1>alter database datafile '/u01/app/oracle/oradata/PROD1/users01.dbf' offline;
+Database altered.
+SYS@PROD1>alter database open;
+
+백업받았던 파일을 복사해온다.
+그리고 리커버...
+SYS@PROD1>recover datafile '/u01/app/oracle/oradata/PROD1/users01.dbf';
+ORA-00279: change 3005700 generated at 06/19/2020 13:48:06 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_38_1043157458.arc
+ORA-00280: change 3005700 for thread 1 is in sequence #38
+
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+cancel
+Media recovery cancelled.
+어익후.. 실패했네..
+
+그냥 테이블 스페이스 날려볼까?
+SYS@PROD1>drop tablespace users including contents and datafiles;
+drop tablespace users including contents and datafiles
+*
+ERROR at line 1:
+ORA-12919: Can not drop the default permanent tablespace
+
+아 이것도 안되네..
+
+음.. 콜드백업한걸로 복구해볼까..
+[oracle@edydr1p1 coldBU_1]$ cp * /u01/app/oracle/oradata/PROD1
+
+데이터베이스 시작.. 흐미...
+SYS@PROD1>startup
+ORACLE instance started.
+Database mounted.
+Database opened.
+
+SYS@PROD1>archive log list;
+Database log mode	       Archive Mode
+Automatic archival	       Enabled
+Archive destination	       /home/oracle/arch2
+Oldest online log sequence     26
+Next log sequence to archive   28
+Current log sequence	       28
+SYS@PROD1>select group#, sequence#,status from v$log;
+
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   27 INACTIVE
+	 2	   28 CURRENT
+	 3	   26 INACTIVE
+
+3 rows selected.
+
+Elapsed: 00:00:00.01
+SYS@PROD1>select sequence#, name from v$archived_log;
+
+ SEQUENCE# NAME
+---------- --------------------------------------------------
+	25 /home/oracle/arch1/arch_1_25_1043157458.arc
+	25 /home/oracle/arch2/arch_1_25_1043157458.arc
+	26 /home/oracle/arch1/arch_1_26_1043157458.arc
+	26 /home/oracle/arch2/arch_1_26_1043157458.arc
+	27 /home/oracle/arch1/arch_1_27_1043157458.arc
+	27 /home/oracle/arch2/arch_1_27_1043157458.arc
+
+모두가 예전걸로 돌아가버렸네…
+Question.. 위의 상황에서 users 테이블 스페이스만 예전걸로 돌릴수는 없을까?
+
+다음 시나리오 테스트를 위해 핫백업을 다시 받아놔야 한다. 그래야 아카이브 로그를 활용할수있다.
+SYS@PROD1>alter database begin backup
+Database altered.
+핫백업!!!
+SYS@PROD1>alter database end backup;
+
+
+# 아카이브파일을 지운다면
+
+아카이브 로그를 지우더라도 리두로그버퍼가 존재한다면 복구가능하다는 컨셉
+이번에는 아카이브로그 딱 2개만 지우자.
+
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   27 INACTIVE
+	 2	   28 CURRENT
+	 3	   26 INACTIVE
+
+테이블을 만들자.
+SYS@PROD1>create table z tablespace users as select * from hr.employees;
+스위치로그 여러번수행
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   30 ACTIVE
+	 2	   31 ACTIVE
+	 3	   32 CURRENT
+
+SYS@PROD1>select name from v$archived_log;
+NAME
+--------------------------------------------------
+/home/oracle/arch1/arch_1_25_1043157458.arc
+/home/oracle/arch2/arch_1_25_1043157458.arc
+/home/oracle/arch1/arch_1_26_1043157458.arc
+/home/oracle/arch2/arch_1_26_1043157458.arc
+/home/oracle/arch1/arch_1_27_1043157458.arc
+/home/oracle/arch2/arch_1_27_1043157458.arc
+/home/oracle/arch1/arch_1_28_1043157458.arc
+/home/oracle/arch2/arch_1_28_1043157458.arc
+/home/oracle/arch1/arch_1_29_1043157458.arc
+/home/oracle/arch2/arch_1_29_1043157458.arc
+/home/oracle/arch1/arch_1_30_1043157458.arc
+/home/oracle/arch2/arch_1_30_1043157458.arc
+/home/oracle/arch1/arch_1_31_1043157458.arc
+/home/oracle/arch2/arch_1_31_1043157458.arc
+
+디비끄고 users01.dbf 와 시퀀스 30,31 아카이브 지우자.
+그리고 디비 시작
+SYS@PROD1>startup
+ORACLE instance started.
+
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 6 - see DBWR trace file
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+SYS@PROD1>alter database datafile '/u01/app/oracle/oradata/PROD1/users01.dbf' offline;
+Database altered.
+
+핫백업받았던 파일로 데이터 복구
+[oracle@edydr1p1 PROD1]$ cp ~/backup/arch/hotBU_2/users01.dbf .
+
+그리고 리커버
+SYS@PROD1>recover datafile '/u01/app/oracle/oradata/PROD1/users01.dbf'
+ORA-00279: change 2263611 generated at 06/19/2020 15:10:15 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_28_1043157458.arc
+ORA-00280: change 2263611 for thread 1 is in sequence #28
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+auto
+ORA-00279: change 2263920 generated at 06/19/2020 15:12:29 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_29_1043157458.arc
+ORA-00280: change 2263920 for thread 1 is in sequence #29
+Log applied.
+Media recovery complete.
+
+온라인
+SYS@PROD1>alter database datafile '/u01/app/oracle/oradata/PROD1/users01.dbf' online;
+Database altered.
+
+
+
+
+
+만약 아카이브가 위와 같이 날라갔다면 다음에 또다시 문제가 발생할경우를 대비하여 핫백업을 한번더 받아야겠다.
+정리하면, 핫백업은 아카이브모드시작시에 한번 받고, 아카이브가 손실되서 복구한후에 한번더 받는다.
+
+
+# 아카이브 파일이 사라졌다면
+리두로그 파일로 아카이브를 만들어낼수있다.
+
+SYS@PROD1>select group#, sequence#, status from v$log;
+    GROUP#  SEQUENCE# STATUS
+---------- ---------- ----------------
+	 1	   36 CURRENT
+	 2	   34 INACTIVE
+	 3	   35 INACTIVE
+
+SYS@PROD1>select group#, member from v$logfile;
+    GROUP# MEMBER
+---------- --------------------------------------------------
+	 3 /u01/app/oracle/oradata/PROD1/redo03.log
+	 2 /u01/app/oracle/oradata/PROD1/redo02.log
+	 1 /u01/app/oracle/oradata/PROD1/redo01.log
+
+SYS@PROD1>select name from v$archived_log;
+NAME
+--------------------------------------------------
+/home/oracle/arch1/arch_1_34_1043157458.arc
+/home/oracle/arch2/arch_1_34_1043157458.arc
+/home/oracle/arch1/arch_1_35_1043157458.arc
+/home/oracle/arch2/arch_1_35_1043157458.arc
+
+34번 시퀀스의 리두로그파일과 아카이브 로그파일을 비교해보자.
+파일용량은 틀림
+하지만 복사해서 (이름변경까지 ) 사용할수있음
+
+
+# 콜드백업복구 & 새로운 리두로그 번호 부여
+
+작업수행전 콜드백업을 수행하자. ( 셧다운후 복사하는것 )
+[oracle@edydr1p1 coldBU_1]$ rsync -av $ORACLE_BASE/oradata/PROD1/* .
+
+SYS@PROD1>select group#,sequence#, members, archived, status from v$log;
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS
+---------- ---------- ---------- --- ----------------
+	 1	   36	       1 YES INACTIVE
+	 2	   37	       1 NO  CURRENT
+	 3	   35	       1 YES INACTIVE
+
+로그스위치를 엄청 때리자. ( 5번 정도 )
+SYS@PROD1>alter system switch logfile;
+
+SYS@PROD1>select group#,sequence#, members, archived, status from v$log;
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS
+---------- ---------- ---------- --- ----------------
+	 1	   42	       1 YES INACTIVE
+	 2	   43	       1 NO  CURRENT
+	 3	   41	       1 YES INACTIVE
+
+SYS@PROD1>select sequence#, name from v$archived_log;
+ SEQUENCE# NAME
+---------- ------------------------------------------------------------
+	...
+	38 /home/oracle/arch2/arch_1_38_1043157458.arc
+	39 /home/oracle/arch1/arch_1_39_1043157458.arc
+	39 /home/oracle/arch2/arch_1_39_1043157458.arc
+	40 /home/oracle/arch1/arch_1_40_1043157458.arc
+	40 /home/oracle/arch2/arch_1_40_1043157458.arc
+	41 /home/oracle/arch1/arch_1_41_1043157458.arc
+	41 /home/oracle/arch2/arch_1_41_1043157458.arc
+	42 /home/oracle/arch1/arch_1_42_1043157458.arc
+	42 /home/oracle/arch2/arch_1_42_1043157458.arc
+
+디비를 내리고 users01.dbf 와 40번시퀀스아카이브로그를 지우자.
+[oracle@edydr1p1 PROD1]$ rm users01.dbf 
+[oracle@edydr1p1 ~]$ rm /home/oracle/arch1/arch_1_40_1043157458.arc
+[oracle@edydr1p1 ~]$ rm /home/oracle/arch2/arch_1_40_1043157458.arc
+
+디비를 다시시작하자. 다음과 같은 에러가 난다.
+SYS@PROD1>startup
+ORACLE instance started.
+
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 6 - see DBWR trace file
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+
+SYS@PROD1>select * from v$recover_file;
+     FILE# ONLINE  ONLINE_ ERROR				       CHANGE# TIME	     CON_ID
+---------- ------- ------- ---------------------------------------- ---------- ---------  6 ONLINE  ONLINE  FILE NOT FOUND				     0			  0
+
+콜드백업받았던걸로 복구를 해보자.
+[oracle@edydr1p1 coldBU_1]$ cp users01.dbf $ORACLE_BASE/oradata/PROD1
+
+디비를 시작해보자. 근데 에러가 나네
+SYS@PROD1>alter database open;
+alter database open
+*
+ERROR at line 1:
+ORA-01113: file 6 needs media recovery
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+
+SYS@PROD1>select * from v$recovery_log;
+   THREAD#  SEQUENCE# TIME	ARCHIVE_NAME			       CON_ID
+---------- ---------- --------- -------------------------------------------------- 
+	 1	   36 19-JUN-20 /home/oracle/arch2/arch_1_36_1043157458.arc		    0
+	 1	   37 22-JUN-20 /home/oracle/arch2/arch_1_37_1043157458.arc		    0
+	 1	   38 22-JUN-20 /home/oracle/arch2/arch_1_38_1043157458.arc		    0
+	 1	   39 22-JUN-20 /home/oracle/arch2/arch_1_39_1043157458.arc		    0
+	 1	   40 22-JUN-20 /home/oracle/arch2/arch_1_40_1043157458.arc		    0
+
+
+테이블스페이스를 복구해보자.
+SYS@PROD1>recover tablespace users;
+ORA-00279: change 2268187 generated at 06/19/2020 15:47:51 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_36_1043157458.arc
+ORA-00280: change 2268187 for thread 1 is in sequence #36
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+auto
+ORA-00279: change 2370567 generated at 06/22/2020 09:54:49 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_37_1043157458.arc
+ORA-00280: change 2370567 for thread 1 is in sequence #37
+
+ORA-00279: change 2372668 generated at 06/22/2020 10:08:47 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_38_1043157458.arc
+ORA-00280: change 2372668 for thread 1 is in sequence #38
+
+ORA-00279: change 2372700 generated at 06/22/2020 10:09:09 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_39_1043157458.arc
+ORA-00280: change 2372700 for thread 1 is in sequence #39
+
+ORA-00279: change 2372703 generated at 06/22/2020 10:09:11 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch2/arch_1_40_1043157458.arc
+ORA-00280: change 2372703 for thread 1 is in sequence #40
+
+ORA-00308: cannot open archived log '/home/oracle/arch2/arch_1_40_1043157458.arc'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+DB complete recovery 를 위해서는 40번 아카이브가 있어야 하지만 사라진상태이다 ㅠㅠ
+콜드백업한걸 전체를 가져와서 복구하고 아카이브 로그번호를 재 조정하는 전략으로 해보자.
+SYS@PROD1>shutdown abort
+ORACLE instance shut down.
+[oracle@edydr1p1 coldBU_1]$ cp * $ORACLE_BASE/oradata/PROD1
+
+
+마운트 단계까지 올리고
+SYS@PROD1>startup mount
+
+이게 머하는것인고… 이거는 cancel 을 명시적으로 입력해야한다.
+SYS@PROD1>recover database until cancel
+
+SYS@PROD1>select group#, sequence#, members, archived, status from v$log;
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS
+---------- ---------- ---------- --- ----------------
+	 1	   36	       1 NO  CURRENT
+	 3	   35	       1 YES INACTIVE
+	 2	   34	       1 YES INACTIVE
+
+3 rows selected.
+
+Elapsed: 00:00:00.01
+SYS@PROD1>alter database open;
+alter database open
+*
+ERROR at line 1:
+ORA-01589: must use RESETLOGS or NORESETLOGS option for database open
+
+리셋을 시킨다..
+SYS@PROD1>alter database open resetlogs;
+Database altered.
+
+시퀀스가 완전히 새로 시작하네 1 부터
+SYS@PROD1>select group#, sequence#, members, archived, status from v$log;
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS
+---------- ---------- ---------- --- ----------------
+	 1	    1	       1 NO  CURRENT
+	 2	    0	       1 YES UNUSED
+	 3	    0	       1 YES UNUSED
+
+리셋한 시점에서는 콜드백업이 필요하다
+
+SYS@PROD1>select group#, sequence#, members, archived, status, first_change#, first_time, next_change#, next_time from v$log;
+
+
+SYS@PROD1>shutdown immediate;
+콜드백업 받는다.
+[oracle@edydr1p1 arch]$ mkdir coldBU_2_resetlogs
+[oracle@edydr1p1 coldBU_2_resetlogs]$ rsync -av $ORACLE_BASE/oradata/PROD1/* .
+기존에 모든 아카이브는 지워버리자. 콜드백업하면 이전의 아카이빙은 쓸모 없으니까
+[oracle@edydr1p1 arch1]$ rm -f *
+[oracle@edydr1p1 arch2]$ rm -f *
+디비를 다시 시작하자.
+SYS@PROD1>startup
+SYS@PROD1>alter system archive log current;
+아카이브로그 히스토리를 살펴보자.
+SYS@PROD1>select recid,sequence#, first_change#, next_change#, resetlogs_change# from v$log_history;
+     RECID  SEQUENCE# FIRST_CHANGE# NEXT_CHANGE# RESETLOGS_CHANGE#
+---------- ---------- ------------- ------------ -----------------
+	 1	    1	    1594143	 1613149	   1594143
+	 2	    2	    1613149	 1618455	   1594143
+	...
+	33	   33	    2266407	 2268158	   1594143
+	34	   34	    2268158	 2268184	   1594143
+	35	   35	    2268184	 2268187	   1594143
+	36	    1	    2372704	 2375338	   2372704
+
+시퀀스가 35 에서 1로 변한걸 볼수있다.
+아카이브 로그디렉토리에 파일도 확인해보자.
+[oracle@edydr1p1 arch1]$ ll
+total 1944
+-rw-r----- 1 oracle oinstall 1989632 Jun 22 10:53 arch_1_1_1043749933.arc
+
+
+# 아카이브 디렉토리를 두개로 가져가니 테스트수행이 불편하니 한개로 변경하자.
+SYS@PROD1>show parameter log_archive_dest_2
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+log_archive_dest_2		     string	 location=/home/oracle/arch2 ma
+						 ndatory
+
+두번째 아카이브인데 없애버리자.
+SYS@PROD1>alter system set log_archive_dest_2 = '' scope=spfile;
+또는
+SYS@PROD1>alter system reset log_archive_dest_2 scope=spfile;
+
+그리고 디비 재시작
+SYS@PROD1>select destination, binding, status from v$archive_dest;
+DESTINATION				 BINDING   STATUS
+---------------------------------------- --------- ---------
+/home/oracle/arch1			 MANDATORY VALID
+					 OPTIONAL  INACTIVE
+					 OPTIONAL  INACTIVE
+...
+
+SYS@PROD1>alter system archive log current;
+
+SYS@PROD1>select sequence#, name, first_change#, next_change# from v$archived_log;
+ SEQUENCE# NAME 					 FIRST_CHANGE# NEXT_CHANGE#
+---------- --------------------------------------------- ------------- ------------
+...
+	35 /home/oracle/arch2/arch_1_35_1043157458.arc	       2268184	    2268187
+	36 /home/oracle/arch1/arch_1_36_1043157458.arc	       2268187	    2372704
+	36 /home/oracle/arch2/arch_1_36_1043157458.arc	       2268187	    2372704
+	 1 /home/oracle/arch1/arch_1_1_1043749933.arc	       2372704	    2375338
+	 1 /home/oracle/arch2/arch_1_1_1043749933.arc	       2372704	    2375338
+	 2 /home/oracle/arch1/arch_1_2_1043749933.arc	       2375338	    2377196
+
+아카이브 로그 파일이 한개만 생성되는것을 볼수있다.
+
+
+#13. 특정시점으로 돌려서 디비를 시작하기 ( 사용자의 오류) -> recover database until time 
+
+사용자의 실수 이전으로 돌리려면  사용자실수 이전의 백업본으로 덮어씌운후에
+사용자의 실수시점 이전타이밍으로 복구하는것이다. ( 불완전 복구 )
+
+SYS@PROD1>create tablespace insa_tbs datafile '$ORACLE_BASE/oradata/PROD1/insa_tbs01.dbf' size 10M ;
+
+Tablespace created.
+
+Elapsed: 00:00:00.13
+SYS@PROD1>select a.file#, b.name, a.status, a.checkpoint_change# from v$datafile a, v$tablespace b
+  2  where a.ts#=b.ts#;
+
+     FILE# NAME 			  STATUS  CHECKPOINT_CHANGE#
+---------- ------------------------------ ------- ------------------
+	 1 SYSTEM			  SYSTEM	     2489491
+	 2 INSA_TBS			  ONLINE	     2493028
+	 3 SYSAUX			  ONLINE	     2489491
+	 4 UNDOTBS1			  ONLINE	     2489491
+	 5 EXAMPLE			  ONLINE	     2489491
+	 6 USERS			  ONLINE	     2489491
+
+SYS@PROD1>select group#, sequence#, members, archived, status, first_change#, first_time, next_change#, next_time from v$log;
+
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS	      FIRST_CHANGE# FIRST_TIM NEXT_CHANGE# NEXT_TIME
+---------- ---------- ---------- --- ---------------- ------------- --------- ------------ ---------
+	 1	    7	       1 NO  CURRENT		    2489491 22-JUN-20	2.8147E+14
+	 2	    5	       1 YES INACTIVE		    2489485 22-JUN-20	   2489488 22-JUN-20
+	 3	    6	       1 YES INACTIVE		    2489488 22-JUN-20	   2489491 22-JUN-20
+
+
+로그스위치 일으킨다. 여러번
+SYS@PROD1>alter system archive log current;
+SYS@PROD1>select group#, sequence#, members, archived, status from v$log;
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS
+---------- ---------- ---------- --- ----------------
+	 1	   10	       1 YES INACTIVE
+	 2	   11	       1 NO  CURRENT
+	 3	    9	       1 YES INACTIVE
+
+
+타임스탬프 파악
+SYS@PROD1>select systimestamp from dual;
+SYSTIMESTAMP
+---------------------------------------------------------------------------
+22-JUN-20 04.11.45.757150 PM +09:00
+
+사용자의 논리적인 실수를 발생시킨다.
+SYS@PROD1>drop tablespace insa_tbs including contents and datafiles;
+
+이건 나중에 확인용 테이블 생성
+SYS@PROD1>create table hr.emp_20 as select * from hr.employees;
+
+서버를 끄고 , 마운트 모드로 스타트업
+SYS@PROD1>alter session set nls_date_format = 'yyyy/mm/dd hh24:mi:ss';
+논리적인 실수를 일으키기 바로 이전으로 복구
+SYS@PROD1>recover database until time '2020/06/22 16:11:45';
+Media recovery complete.
+디비 시작.. 어이쿠 안되네.. 아카이브 로그를 조정해야겠네
+SYS@PROD1>alter database open;
+alter database open
+*
+ERROR at line 1:
+ORA-01589: must use RESETLOGS or NORESETLOGS option for database open
+
+SYS@PROD1>alter database open resetlogs;
+이러면 데이터베이스가 OPEN 상태가된다.
+
+
+
+
+#14. temporary 테이블 스페이스가 손상이 되었다면
+
+Sorting, Group By 에 관련된 영역 : PGA,  temporary tablespace
+3가지 해결 방법이 있다.
+add tempfile & drop 기존 tempfile
+새로운 tablespace 생성후 그걸 디폴트 템프스페이스로 지정
+서버 재시작하면 자동으로 만들어진다.
+
+템프 파일삭제
+[oracle@edydr1p1 ~]$ rm /u01/app/oracle/oradata/PROD1/temp01.dbf
+
+극한 order by 테스트
+SYS@PROD1>select a.owner, a.object_name, b.owner, b.object_name from dba_objects a, dba_objects b order by 1,2,3,4;
+ERROR at line 1:
+ORA-01565: error in identifying file '/u01/app/oracle/oradata/PROD1/temp01.dbf'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+한참 지나야 이런 에러가 뜬다. 약 30초쯤 지나서..
+
+SYS@PROD1>select property_value from database_properties where property_name ='DEFAULT_TEMP_TABLESPACE';
+PROPERTY_VALUE
+---------------------------------------------------------------------------
+TEMP
+
+SYS@PROD1>select create_bytes/1024/1024 MB from v$tempfile;
+	MB
+----------
+	60
+
+첫번째 방법 : add tempfile & drop 기존 tempfile
+SYS@PROD1>alter tablespace temp add tempfile '$ORACLE_BASE/oradata/PROD1/temp02.dbf' size 60M;
+
+Elapsed: 00:00:00.03
+SYS@PROD1>alter tablespace temp drop tempfile '$ORACLE_BASE/oradata/PROD1/temp01.dbf';
+
+
+두번째 방법 : 새로운 tablespace 생성후 그걸 디폴트 템프스페이스로 지정
+SYS@PROD1>create temporary tablespace temp_new tempfile '$ORACLE_BASE/oradata/PROD1/temp_new01.dbf' size 60M;
+
+SYS@PROD1>alter database default temporary tablespace temp_new;
+
+SYS@PROD1>select name from v$tempfile;
+NAME
+------------------------------------------------------------
+/u01/app/oracle/oradata/PROD1/temp_new01.dbf
+/u01/app/oracle/oradata/PROD1/temp02.dbf
+
+SYS@PROD1>drop tablespace temp including contents and datafiles;
+
+
+
+
+
+
+
+
+
+
+
+
+#15. UNDO 테이블스페이스 복구
+
+테이블스페이스의 종류는 3가지다. ( PERMANENT,UNDO,TEMPORARY )
+UNDO 는 트랜잭션의 이전버전을 관리하는 테이블스페이스다.
+
+퀴즈 . REDO 와 UNDO 의 차이는?
+
+SYS@PROD1> select a.file#, b.name, a.name, a.status from v$datafile a, v$tablespace b where a.ts#=b.ts#;
+ FILE# BN	  NAME						STATUS
+------ ---------- --------------------------------------------- -------
+     1 SYSTEM	  /u01/app/oracle/oradata/PROD1/system01.dbf	SYSTEM
+     2 INSA_TBS   /u01/app/oracle/oradata/PROD1/insa_tbs01.dbf	ONLINE
+     3 SYSAUX	  /u01/app/oracle/oradata/PROD1/sysaux01.dbf	ONLINE
+     4 UNDOTBS1   /u01/app/oracle/oradata/PROD1/undotbs01.dbf	ONLINE
+     5 EXAMPLE	  /u01/app/oracle/oradata/PROD1/example01.dbf	ONLINE
+     6 USERS	  /u01/app/oracle/oradata/PROD1/users01.dbf	ONLINE
+
+서버를 끄고 UNDO 데이터파일을 지우자.
+[oracle@edydr1p1 PROD1]$ rm /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+서버를 다시 시작하자.
+SYS@PROD1>startup
+ORACLE instance started.
+ORA-01157: cannot identify/lock data file 4 - see DBWR trace file
+ORA-01110: data file 4: '/u01/app/oracle/oradata/PROD1/undotbs01.dbf'
+
+Alert Log 의 내용
+Tue Jun 23 11:23:10 2020
+Errors in file /u01/app/oracle/diag/rdbms/prod1/PROD1/trace/PROD1_ora_8084.trc:
+ORA-01157: cannot identify/lock data file 4 - see DBWR trace file
+ORA-01110: data file 4: '/u01/app/oracle/oradata/PROD1/undotbs01.dbf'
+ORA-1157 signalled during: ALTER DATABASE OPEN...
+
+
+SYS@PROD1>select * from v$recover_file;
+ FILE# ONLINE  ONLINE_ ERROR		       CHANGE# TIME	     CON_ID
+------ ------- ------- -------------------- ---------- --------- ----------
+     4 ONLINE  ONLINE  FILE NOT FOUND		     0			  0
+
+콜드백업했던걸로 파일을 복구하자.
+[oracle@edydr1p1 PROD1]$ cp ~/backup/arch/coldBU_3/undotbs01.dbf .
+
+SYS@PROD1>recover tablespace undotbs1;
+Media recovery complete.
+
+SYS@PROD1>alter database open;
+Database altered.
+
+
+
+#16. Redo 로그파일이 문제가 생겼을때
+
+#case1> 아카이브 생성완료된 inactive log file 삭제된후 db close 상태
+
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+
+    GROUP#  SEQUENCE# MEMBER					       MB ARC STATUS
+---------- ---------- ---------------------------------------- ---------- --- 
+	 3	    3 /u01/app/oracle/oradata/PROD1/redo03.log	       50 NO  CURRENT
+	 2	    2 /u01/app/oracle/oradata/PROD1/redo02.log	       50 YES INACTIVE
+	 1	    1 /u01/app/oracle/oradata/PROD1/redo01.log	       50 YES INACTIVE
+=> redo02.log 는 아카이브됬고, Inactive 상태이다.
+
+SYS@PROD1>shutdown immediate;
+리두로그 파일 삭제 ( CURRENT 가 아닌 로그 파일 삭제 )
+[oracle@edydr1p1 PROD1]$ rm redo02.log 
+
+그리고 재시작
+SYS@PROD1>startup
+ORACLE instance started.
+Database mounted.
+ORA-03113: end-of-file on communication channel
+Process ID: 8830
+Session ID: 237 Serial number: 35170
+
+AlertLog 내용 ; redo02.log 파일이 없다는 내용
+Additional information: 3
+Tue Jun 23 11:53:28 2020
+Errors in file /u01/app/oracle/diag/rdbms/prod1/PROD1/trace/PROD1_lgwr_8798.trc:
+ORA-00313: open failed for members of log group 2 of thread 1
+ORA-00312: online log 2 thread 1: '/u01/app/oracle/oradata/PROD1/redo02.log'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+Tue Jun 23 11:53:28 2020
+Errors in file /u01/app/oracle/diag/rdbms/prod1/PROD1/trace/PROD1_ora_8830.trc:
+ORA-00313: open failed for members of log group 1 of thread 
+ORA-00312: online log 2 thread 1: '/u01/app/oracle/oradata/PROD1/redo02.log'
+Tue Jun 23 11:53:28 2020
+ARC1 started with pid=27, OS id=8836 
+Tue Jun 23 11:53:28 2020
+
+
+SYS@PROD1>startup mount
+SYS@PROD1>alter database clear logfile group 2;
+이렇게 하면 redo02.log 파일이 생성이 된다.
+
+SYS@PROD1>alter database open;
+
+
+
+
+
+
+
+#case2> current 아닌 그룹이 삭제 db open 상태
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+    GROUP#  SEQUENCE# MEMBER					       MB ARC STATUS
+---------- ---------- --------------------------------------------- ----- --- 
+	 3	    3 /u01/app/oracle/oradata/PROD1/redo03.log	       50 YES INACTIVE
+	 2	    4 /u01/app/oracle/oradata/PROD1/redo02.log	       50 YES INACTIVE
+	 1	    5 /u01/app/oracle/oradata/PROD1/redo01.log	       50 NO  CURRENT
+
+참고로 ACTIVE->INACTIVE 상태가 될때까지 좀 오래 기다려야하네.. ( alter system switch logfile )
+redo02.log 또 지우자.
+
+로그스위치 몇번하면 Hang 이 걸린다.
+SYS@PROD1>alter system switch logfile;
+그때 alert log 트레이스를 보면 아래의 에러가 무한정 발생한다.
+Errors in file /u01/app/oracle/diag/rdbms/prod1/PROD1/trace/PROD1_arc3_8924.trc:
+ORA-00313: open failed for members of log group 2 of thread 1
+ORA-00312: online log 2 thread 1: '/u01/app/oracle/oradata/PROD1/redo02.log'
+ORA-27041: unable to open file
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+
+리두로그 파일을 삭제후 재생성한다.
+SYS@PROD1>alter database clear unarchived logfile group 2;
+Database altered.
+
+근데 이렇게 되면 아카이브 로그 파일 손실이 일어나기때문에 전체백업을 실행해야한다고 한다.
+서버끄고 -> 콜드백업받고 ( backup/arch/coldBU_4 ) -> startup -> archive 디렉토리 기존 파일 삭제
+
+
+
+#case3> current 그룹이 삭제된후 db 정상종료
+SYS@PROD1>select group#, sequence#, members, archived, status, first_change#, first_time from v$log;
+    GROUP#  SEQUENCE#	 MEMBERS ARC STATUS	      FIRST_CHANGE# FIRST_TIM
+---------- ---------- ---------- --- ---------------- ------------- ---------
+	 1	    8	       1 YES INACTIVE		    2613716 23-JUN-20
+	 2	   10	       1 NO  CURRENT		    2618980 23-JUN-20
+	 3	    9	       1 YES INACTIVE		    2613747 23-JUN-20
+
+테이블 하나 만든다.
+SYS@PROD1>create table hr.loc as select * from hr.locations;
+Table created.
+
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+
+    GROUP#  SEQUENCE# MEMBER					       MB ARC STATUS
+---------- ---------- --------------------------------------------- ----- --- 
+	 3	    9 /u01/app/oracle/oradata/PROD1/redo03.log	       50 YES INACTIVE
+	 2	   10 /u01/app/oracle/oradata/PROD1/redo02.log	       50 NO  CURRENT
+	 1	    8 /u01/app/oracle/oradata/PROD1/redo01.log	       50 YES INACTIVE
+
+current 에 해당하는 리두로그 파일을 삭제한다.
+[oracle@edydr1p1 arch1]$ rm /u01/app/oracle/oradata/PROD1/redo02.log
+
+그리고 서버를 껐다(정상종료) , 켠다.
+SYS@PROD1>startup
+ORACLE instance started.
+Database mounted.
+ORA-03113: end-of-file on communication channel
+Process ID: 10882
+Session ID: 237 Serial number: 42819
+
+켜지지 않는다. 하지만 에러원인을 알수가 없다. 그렇다면 alert_log 를 확인해보자.
+Additional information: 3
+Tue Jun 23 13:59:49 2020
+Errors in file /u01/app/oracle/diag/rdbms/prod1/PROD1/trace/PROD1_ora_10882.trc:
+ORA-00313: open failed for members of log group 1 of thread
+ORA-00312: online log 2 thread 1: '/u01/app/oracle/oradata/PROD1/redo02.log'
+
+redo02.log 가 없다는 메세지가 뜬다.
+
+마운트모드로 startup 한다.
+SYS@PROD1>startup mount
+
+SYS@PROD1>select * from v$logfile;
+    GROUP# STATUS  TYPE    MEMBER					      IS_     CON_ID
+---------- ------- ------- -------------------------------------------------- --- 
+	 3	   ONLINE  /u01/app/oracle/oradata/PROD1/redo03.log	      NO	   0
+	 2	   ONLINE  /u01/app/oracle/oradata/PROD1/redo02.log	      NO	   0
+	 1	   ONLINE  /u01/app/oracle/oradata/PROD1/redo01.log	      NO	   0
+
+redo02.log 가 group 2 이므로
+SYS@PROD1>alter database clear unarchived logfile group 2;
+Database altered.
+
+SYS@PROD1>alter database open
+
+이때도 전체 백업 필요
+서버끄고 -> 콜드백업받고 ( backup/arch/coldBU_4 ) -> startup -> archive 디렉토리 기존 파일 삭제
+
+
+#case4> current 그룹이 삭제된 후 db 비정상종료
+
+SYS@PROD1>create table hr.copy_emp as select * from hr.employees;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>create table hr.copy_dest as select * from hr.departments;
+
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+
+    GROUP#  SEQUENCE# MEMBER							 MB ARC STATUS
+---------- ---------- -------------------------------------------------- ---------- --- ----------------
+	 3	   13 /u01/app/oracle/oradata/PROD1/redo03.log			 50 YES INACTIVE
+	 2	   15 /u01/app/oracle/oradata/PROD1/redo02.log			 50 NO	CURRENT
+	 1	   14 /u01/app/oracle/oradata/PROD1/redo01.log			 50 YES ACTIVE
+
+
+current 그룹인 redo02.log 파일을 삭제한다.
+그리고 비정상종료를 시킨다.
+SYS@PROD1>shutdown abort;
+
+재시작한다.
+SYS@PROD1>startup
+ORACLE instance started.
+Database mounted.
+ORA-00313: open failed for members of log group 2 of thread 1
+ORA-00312: online log 2 thread 1: '/u01/app/oracle/oradata/PROD1/redo02.log'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+리두로그파일을 복구하려고했지만 에러가 난다.
+SYS@PROD1>alter database clear unarchived logfile group 2;
+alter database clear unarchived logfile group 2
+*
+ERROR at line 1:
+ORA-01624: log 2 needed for crash recovery of instance PROD1 (thread 1)
+ORA-00312: online log 2 thread 1: '/u01/app/oracle/oradata/PROD1/redo02.log'
+
+콜드백업으로 부터 파일을 가져온다.
+[oracle@edydr1p1 PROD1]$ rsync -av ~/backup/arch/coldBU_4/* .
+
+SYS@PROD1>recover database until cancel;
+
+SYS@PROD1>alter database open
+  2  ;
+alter database open
+*
+ERROR at line 1:
+ORA-01589: must use RESETLOGS or NORESETLOGS option for database open
+
+Elapsed: 00:00:00.01
+SYS@PROD1>alter database open resetlogs;
+
+TODO : 17,18 번 시나리오 해보기, 16 마무리하기
+
+#17. 로그마이너 툴사용
+
+SYS@PROD1>select supplemental_log_data_min from v$database;
+SUPPLEME
+--------
+NO
+
+SYS@PROD1>alter database add supplemental log data;
+~/backup/util 디렉토리 생성하고 거기에 파일이 만들어지도록 설정
+SYS@PROD1>alter system set utl_file_dir='/home/oracle/backup/util' scope=spfile;
+서버 껐다 켠다.
+SYS@PROD1>show parameter utl_file_dir
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+utl_file_dir			     string	 /home/oracle/backup/util
+
+테이블을 만들고 DML 들을 실행한다.
+SYS@PROD1>create table hr.test(id number, name varchar2(30)) ;
+SYS@PROD1>insert into hr.test values (1,'oracle');
+SYS@PROD1>insert into hr.test values (2,'MySQL');
+SYS@PROD1>commit;
+SYS@PROD1>select group#,sequence#,archived,status from v$log;
+    GROUP#  SEQUENCE# ARC STATUS
+---------- ---------- --- ----------------
+	 1	    4 NO  CURRENT
+	 2	    2 YES INACTIVE
+	 3	    3 YES INACTIVE
+
+SYS@PROD1>update hr.test set name='itwill' where id=1;
+SYS@PROD1>delete hr.test where id=2;
+SYS@PROD1>commit;
+
+PL/SQL 로 다음과 같이 수행한다.
+SYS@PROD1>begin
+  2  dbms_logmnr_d.build('dict.dat', '/home/oracle/backup/util');
+  3  end;
+  4  /
+PL/SQL procedure successfully completed.
+Elapsed: 00:00:03.12
+
+SYS@PROD1>begin
+  2  dbms_logmnr.start_logmnr(dictfilename => '/home/oracle/backup/util/dict.dat');
+  3  end;
+  4  /
+PL/SQL procedure successfully completed.
+
+SYS@PROD1>select to_char(timestamp,'yyyy-mm-dd hh24:mi:ss'),operation, sql_redo, sql_undo from v$logmnr_contents where seg_name='TEST';
+TO_CHAR(TIMESTAMP,' OPERATION
+------------------- --------------------------------
+2020-06-24 11:32:42 DDL
+create table hr.test(id number, name varchar2(30)) ;
+
+2020-06-24 11:32:56 INSERT
+insert into "HR"."TEST"("ID","NAME") values ('1','oracle');
+delete from "HR"."TEST" where "ID" = '1' and "NAME" = 'oracle' and ROWID = 'AAAW1CAAGAAAAH1AAA';
+
+2020-06-24 11:33:02 INSERT
+insert into "HR"."TEST"("ID","NAME") values ('2','MySQL');
+delete from "HR"."TEST" where "ID" = '2' and "NAME" = 'MySQL' and ROWID = 'AAAW1CAAGAAAAH1AAB';
+
+2020-06-24 11:34:53 UPDATE
+update "HR"."TEST" set "NAME" = 'itwill' where "NAME" = 'oracle' and ROWID = 'AAAW1CAAGAAAAH1AAA';
+update "HR"."TEST" set "NAME" = 'oracle' where "NAME" = 'itwill' and ROWID = 'AAAW1CAAGAAAAH1AAA';
+
+2020-06-24 11:35:00 DELETE
+delete from "HR"."TEST" where "ID" = '2' and "NAME" = 'MySQL' and ROWID = 'AAAW1CAAGAAAAH1AAB';
+insert into "HR"."TEST"("ID","NAME") values ('2','MySQL');
+
+2020-06-24 11:41:20 INSERT
+insert into "HR"."TEST"("ID","NAME") values ('3','MSSQL');
+delete from "HR"."TEST" where "ID" = '3' and "NAME" = 'MSSQL' and ROWID = 'AAAW1CAAGAAAAH1AAC';
+
+위와 같이 실행했던 쿼리들이 나오고, 그에 해당하는 정반대쿼리가 쌍으로 나온다.
+
+로그마이너를 계속 켜놓으면 부하가 크니 로그마이너를 종료하자.
+SYS@PROD1> exec dbms_logmnr.end_logmnr;
+PL/SQL procedure successfully completed.
+
+
+SYS@PROD1>alter database drop supplemental log data;
+Database altered.
+
+
+
+
+#18. exp, imp 로 백업, 이관툴
+
+exp,imp 는 옵션들이 무지 많다.
+
+#case1> orcl 데이터베이스의 hr 유저의 모든객체 -> PROD1 데이터베이스의 hr 로 이관
+
+orcl 의 hr 유저의 모든객체들을 익스포트 : ~/dump/hr_emp.dmp 로 저장된다.
+[oracle@edydr1p1 dump]$ exp userid=system/oracle_4U owner=hr file=hr_emp.dmp statistics=none
+
+[oracle@edydr1p1 ~]$ . oraenv 
+ORACLE_SID = [orcl] ? PROD1
+
+[oracle@edydr1p1 dump]$ imp userid=system/oracle_4U file=hr_emp.dmp fromuser=hr ignore=Y
+
+#case2 >위에서 받은덤프에서 emp 테이블만 가져온다.
+HR@PROD1>truncate table hr.emp;
+[oracle@edydr1p1 dump]$ imp userid=system/oracle_4U file=hr_emp.dmp fromuser=hr tables=emp data_only=y
+
+#case3> 새로운유저를 만들고 그유저에게 이관
+SYS@PROD1>create user mic identified by oracle default tablespace users quota 10m on users;
+SYS@PROD1>grant create session to mic;
+
+[oracle@edydr1p1 dump]$ imp userid=system/oracle_4U file=hr_emp.dmp fromuser=hr touser=mic tables=emp 
+
+
+
+#19. 컨트롤 파일손상, 리두로그파일로 복구하기
+
+컨트롤파일만 손상, 컨트롤파일은 백업되어있다.
+실습을 위해서 컨트롤 파일을 한개로만 설정하자.
+SYS@PROD1>select name from v$controlfile;
+
+NAME
+--------------------------------------------------
+/u01/app/oracle/oradata/PROD1/control01.ctl
+/u01/app/oracle/oradata/PROD1/control02.ctl
+/u01/app/oracle/oradata/PROD1/control03.ctl
+
+3 rows selected.
+
+Elapsed: 00:00:00.00
+SYS@PROD1>alter system set control_files='$ORACLE_BASE/oradata/PROD1/control01.ctl' scope=spfile;
+System altered.
+
+껐다 켜자. shutdown immediate -> startup
+
+SYS@PROD1>select group#, sequence#, archived, status from v$log;
+    GROUP#  SEQUENCE# ARC STATUS
+---------- ---------- --- ----------------
+	 1	    4 NO  CURRENT
+	 2	    2 YES INACTIVE
+	 3	    3 YES INACTIVE
+
+SYS@PROD1>select group#, type, member from v$logfile;
+    GROUP# TYPE    MEMBER
+---------- ------- ---------------------------------------------
+	 3 ONLINE  /u01/app/oracle/oradata/PROD1/redo03.log
+	 2 ONLINE  /u01/app/oracle/oradata/PROD1/redo02.log
+	 1 ONLINE  /u01/app/oracle/oradata/PROD1/redo01.log
+
+SYS@PROD1>select a.file#, b.name bn, a.name, a.status from v$datafile a , v$tablespace b where a.ts# = b.ts#;
+     FILE# BN	      NAME						 STATUS
+---------- ---------- -------------------------------------------------- -------
+	 1 SYSTEM     /u01/app/oracle/oradata/PROD1/system01.dbf	 SYSTEM
+	 2 INSA_TBS   /u01/app/oracle/oradata/PROD1/insa_tbs01.dbf	 ONLINE
+	 3 SYSAUX     /u01/app/oracle/oradata/PROD1/sysaux01.dbf	 ONLINE
+	 4 UNDOTBS1   /u01/app/oracle/oradata/PROD1/undotbs01.dbf	 ONLINE
+	 6 USERS      /u01/app/oracle/oradata/PROD1/users01.dbf 	 ONLINE
+
+테이블 하나 만들자.
+SYS@PROD1>create table hr.emp_20 as select * from hr.employees where department_id=20;
+Table created.
+
+서버끄고 , 컨트롤 파일을 지워보자. 그리고 startup
+SYS@PROD1>startup
+ORACLE instance started.    ---> 오라클은 STARTED 단계에서 멈췄다.
+ORA-00205: error in identifying control file, check alert log for more info
+AlertLog 의 내용은 다음과 같다. control01.ctl 파일이 없다고 나온다.
+ORA-00210: cannot open the specified control file
+ORA-00202: control file: '/u01/app/oracle/oradata/PROD1/control01.ctl'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+ORA-205 signalled during: ALTER DATABASE   MOUNT...
+
+
+서버내리고 백업받아놨던 컨트롤 파일로 복구를 해보자. 그리고 다시켜자.
+SYS@PROD1>startup
+ORACLE instance started.
+Database mounted.
+ORA-01122: database file 1 failed verification check
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+ORA-01207: file is more recent than control file - old control file
+---> 컨트롤 파일이 오래됐다는 내용
+
+컨트롤 파일을 복구해보자.
+SYS@PROD1>recover database using backup controlfile;
+ORA-00279: change 2751274 generated at 06/24/2020 09:45:15 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_4_1043851752.arc
+ORA-00280: change 2751274 for thread 1 is in sequence #4
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+auto
+ORA-00308: cannot open archived log '/home/oracle/arch1/arch_1_4_1043851752.arc'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+ORA-00308: cannot open archived log '/home/oracle/arch1/arch_1_4_1043851752.arc'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+---> 아카이브 파일이 없다고 복구안되네… 그러면 리두로그 파일을 활용해서 시도해보자.
+arch_1_4 에 해당하는 리두로그 파일을 찾아보자. 아래의 쿼리를 보면 redo01.log 임을 알수있다.
+
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+    GROUP#  SEQUENCE# MEMBER					      MB ARC STATUS
+---------- ---------- --------------------------------------------- ---- --- 
+	 1	    4 /u01/app/oracle/oradata/PROD1/redo01.log	      50 NO  CURRENT
+	 2	    2 /u01/app/oracle/oradata/PROD1/redo02.log	      50 YES INACTIVE
+	 3	    3 /u01/app/oracle/oradata/PROD1/redo03.log	      50 YES INACTIVE
+
+SYS@PROD1>recover database using backup controlfile;
+ORA-00279: change 2751274 generated at 06/24/2020 09:45:15 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_4_1043851752.arc
+ORA-00280: change 2751274 for thread 1 is in sequence #4
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+/u01/app/oracle/oradata/PROD1/redo01.log
+Log applied.
+Media recovery complete. ---> 복구가 되었네.
+SYS@PROD1>alter database open resetlogs;  ---> 리셋시키고 오픈
+SYS@PROD1>select count(*) from hr.emp_20;  ---> 데이터 정상확인
+  COUNT(*)
+----------
+	 2
+
+#20. control 파일손상, sql 파일을 활용하여 복구( create controlfile … )
+data 파일, redo log 파일 은 손상 없고 control 파일만 손상
+control 파일 재생성하여 복구수행
+
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group# order by 1;
+    GROUP#  SEQUENCE# MEMBER					    ARC STATUS
+---------- ---------- --------------------------------------------- --- 
+	 1	    4 /u01/app/oracle/oradata/PROD1/redo01.log	    YES INACTIVE
+	 2	    5 /u01/app/oracle/oradata/PROD1/redo02.log	    NO	CURRENT
+	 3	    3 /u01/app/oracle/oradata/PROD1/redo03.log	    YES INACTIVE
+
+새로운 세션을 열어서 sys 로 접속한다. 그리고 다음 쿼리를 날린다.
+SYS@PROD1>select name from v$database;
+select name from v$database
+                 *
+ERROR at line 1:
+ORA-00210: cannot open the specified control file
+ORA-00202: control file: '/u01/app/oracle/oradata/PROD1/control01.ctl'
+ORA-27041: unable to open file
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+서버끄고 ->  컨트롤 파일을 백업받았던걸로 가져와서 복구하자.
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+
+[oracle@edydr1p1 PROD1]$ cp ~/backup/cold/control01.ctl .
+
+그리고 마운트까지 올린다.
+SYS@PROD1>startup mount
+리커버한다. 
+SYS@PROD1>recover database;
+ORA-00283: recovery session canceled due to errors
+ORA-01122: database file 1 failed verification check
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+ORA-01207: file is more recent than control file - old control file
+---> 컨트롤 파일이 오래됬다고 나온다.
+
+sql 파일을 만든다.
+SYS@PROD1>alter database backup controlfile to trace as '/home/oracle/control.sql';
+
+서버 끄고
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+
+sql 파일을 편집해야한다. Set #1. NORESETLOGS case ~ Set#2 사이껏만 남기고 
+STARTUP NOMOUNT
+CREATE CONTROLFILE REUSE DATABASE "PROD1" NORESETLOGS  ARCHIVELOG
+    MAXLOGFILES 16
+    MAXLOGMEMBERS 3
+    MAXDATAFILES 100
+    MAXINSTANCES 8
+    MAXLOGHISTORY 292
+LOGFILE
+  GROUP 1 '/u01/app/oracle/oradata/PROD1/redo01.log'  SIZE 50M BLOCKSIZE 512,
+  GROUP 2 '/u01/app/oracle/oradata/PROD1/redo02.log'  SIZE 50M BLOCKSIZE 512,
+  GROUP 3 '/u01/app/oracle/oradata/PROD1/redo03.log'  SIZE 50M BLOCKSIZE 512
+-- STANDBY LOGFILE
+DATAFILE
+  '/u01/app/oracle/oradata/PROD1/system01.dbf',
+  '/u01/app/oracle/oradata/PROD1/insa_tbs01.dbf',
+  '/u01/app/oracle/oradata/PROD1/sysaux01.dbf',
+  '/u01/app/oracle/oradata/PROD1/undotbs01.dbf',
+  '/u01/app/oracle/oradata/PROD1/users01.dbf'
+CHARACTER SET AL32UTF8
+
+SYS@PROD1>@control.sql
+
+SYS@PROD1>recover database;
+Media recovery complete.
+컨트롤파일을 새로 생성했기 때문에 리커버할때 물어보지 않는다.
+하지만 불완전 복구이다.
+
+SYS@PROD1>alter database open;
+Database altered.
+
+#21. 데이터파일, 컨트롤파일 손실 ( 리두로그만 온전 )
+
+SYS@PROD1>create table hr.emp_40 as select * from hr.employees where department_id=40;
+스위치로그 3번 정도 ..
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+    GROUP#  SEQUENCE# MEMBER					       MB ARC STATUS
+---------- ---------- ---------------------------------------- ---------- --- 
+	 2	   23 /u01/app/oracle/oradata/PROD1/redo02.log	       50 YES INACTIVE
+	 1	   22 /u01/app/oracle/oradata/PROD1/redo01.log	       50 YES INACTIVE
+	 3	   24 /u01/app/oracle/oradata/PROD1/redo03.log	       50 NO  CURRENT
+
+데이터파일, 컨트롤 파일 삭제
+[oracle@edydr1p1 PROD1]$ rm *.dbf *.ctl
+
+SYS@PROD1>alter system checkpoint;
+SYS@PROD1>/
+SYS@PROD1>/
+
+이상태에서 다른 세션에서 접속
+[oracle@edydr1p1 ~]$ sqlplus hr/hr
+
+SQL*Plus: Release 12.1.0.2.0 Production on Wed Jun 24 15:24:48 2020
+
+Copyright (c) 1982, 2014, Oracle.  All rights reserved.
+
+ERROR:
+ORA-00604: error occurred at recursive SQL level 1
+ORA-01116: error in opening database file 1
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+ORA-27041: unable to open file
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+서버를 끄고
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+콜드백업에서부터 복구를 한다. 
+[oracle@edydr1p1 PROD1]$ rsync -av ~/backup/cold/*.dbf .
+[oracle@edydr1p1 PROD1]$ rsync -av ~/backup/cold/*.ctl .
+
+마운트 모드로 올린다.
+SYS@PROD1>startup mount
+
+컨트롤 파일을 복구한다.
+SYS@PROD1>recover database using backup controlfile;
+ORA-00279: change 3469381 generated at 06/24/2020 15:20:03 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_21_1043925304.arc
+ORA-00280: change 3469381 for thread 1 is in sequence #21
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+auto
+ORA-00279: change 3470226 generated at 06/24/2020 15:22:00 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_22_1043925304.arc
+ORA-00280: change 3470226 for thread 1 is in sequence #22
+ORA-00278: log file '/home/oracle/arch1/arch_1_21_1043925304.arc' no longer needed for this recovery
+
+ORA-00279: change 3470229 generated at 06/24/2020 15:22:05 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_23_1043925304.arc
+ORA-00280: change 3470229 for thread 1 is in sequence #23
+ORA-00278: log file '/home/oracle/arch1/arch_1_22_1043925304.arc' no longer needed for this recovery
+
+ORA-00279: change 3470255 generated at 06/24/2020 15:22:08 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_24_1043925304.arc
+ORA-00280: change 3470255 for thread 1 is in sequence #24
+ORA-00278: log file '/home/oracle/arch1/arch_1_23_1043925304.arc' no longer needed for this recovery
+
+ORA-00308: cannot open archived log '/home/oracle/arch1/arch_1_24_1043925304.arc'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+여기서 멈춘다. 아카이브가 없으니깐 멈춘거지.. 그러면 리두로그파일로 복구하자.
+시퀀스가 24번이니깐 redo03.log 이다. 복구명령을 다시 내리고 파일경로를 물어보면 입력하도록 한다.
+
+SYS@PROD1>recover database using backup controlfile;
+ORA-00279: change 3470255 generated at 06/24/2020 15:22:08 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_24_1043925304.arc
+ORA-00280: change 3470255 for thread 1 is in sequence #24
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+/u01/app/oracle/oradata/PROD1/redo03.log
+Log applied.
+Media recovery complete.
+
+SYS@PROD1>alter database open read only; -- 읽기전용으로 데이터베이스 오픈 !!!
+SYS@PROD1>select * from hr.emp_40; -- 데이터 확인하고
+
+재시작
+SYS@PROD1>startup
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01589: must use RESETLOGS or NORESETLOGS option for database open
+
+SYS@PROD1>alter database open resetlogs;
+#22. data 손상 없고, 컨트롤파일 , 리두 손상
+
+SYS@PROD1>create table hr.dept_new as select * from hr.departments;
+Table created.
+
+SYS@PROD1>select group#, sequence#, archived, status from v$log;
+    GROUP#  SEQUENCE# ARC STATUS
+---------- ---------- --- ----------------
+	 1	    1 YES INACTIVE
+	 2	    2 YES INACTIVE
+	 3	    3 NO  CURRENT
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>/
+SYS@PROD1>/
+[oracle@edydr1p1 arch1]$ ls
+arch_1_2_1043942738.arc  arch_1_3_1043942738.arc  arch_1_4_1043942738.arc  arch_1_5_1043942738.arc
+
+SYS@PROD1>select group#, sequence#, archived, status from v$log;
+    GROUP#  SEQUENCE# ARC STATUS
+---------- ---------- --- ----------------
+	 1	    4 YES INACTIVE
+	 2	    5 YES INACTIVE
+	 3	    6 NO  CURRENT
+
+컨트롤 파일과 리두로그파일을 지운다.
+[oracle@edydr1p1 PROD1]$ rm control01.ctl redo0*
+
+SYS@PROD1>alter system switch logfile;
+
+이때 다른세션에서 접속하면 
+[oracle@edydr1p1 arch1]$ sqlplus / as sysdba
+Connected to an idle instance.
+SYS@PROD1>startup
+ORACLE instance started.
+ORA-00205: error in identifying control file, check alert log for more info
+
+alert_log 를 확인해보자.
+ORA-00210: cannot open the specified control file
+ORA-00202: control file: '/u01/app/oracle/oradata/PROD1/control01.ctl'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+
+컨트롤 파일이 없다고 나오네..
+
+컨트롤 파일, 데이터파일을 백업에서 복사해오자.
+[oracle@edydr1p1 PROD1]$ cp ~/backup/cold/control01.ctl .
+[oracle@edydr1p1 PROD1]$ cp ~/backup/cold/*.dbf .
+데이터 파일과 컨트롤 파일은 항상 같이 복구해줘야한다.
+
+SYS@PROD1>alter database mount
+SYS@PROD1>recover database until cancel using backup controlfile;
+#23. 백업한 컨트롤파일과 현재 데이터파일의 정보가 다를때 
+
+SYS@PROD1>create table scott.emp_20 as select * from hr.employees where department_id=20;
+
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+    GROUP#  SEQUENCE# MEMBER						  MB ARC STATUS
+---------- ---------- ------------------------------------------- ---------- --- 
+	 2	    5 /u01/app/oracle/oradata/PROD1/redo02.log		  50 NO  CURRENT
+	 1	    4 /u01/app/oracle/oradata/PROD1/redo01.log		  50 YES INACTIVE
+	 3	    3 /u01/app/oracle/oradata/PROD1/redo03.log		  50 YES INACTIVE
+
+SYS@PROD1>create tablespace data_tbs datafile '$ORACLE_BASE/oradata/PROD1/data01.dbf' size 5M;
+
+SYS@PROD1>create table scott.dept_n tablespace data_tbs as select * from hr.departments;
+
+서버 끄고 컨트롤 파일을 지운다. 그리고 서버 다시 켠다.
+SYS@PROD1>startup
+ORACLE instance started.
+ORA-00205: error in identifying control file, check alert log for more info
+
+alert log 파일을 열어보자.
+ORA-00210: cannot open the specified control file
+ORA-00202: control file: '/u01/app/oracle/oradata/PROD1/control01.ctl'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+ORA-205 signalled during: ALTER DATABASE   MOUNT..
+
+
+서버끄고, 컨트롤파일을 백업에서 복구하고 서버를 다시 시작한다.
+[oracle@edydr1p1 PROD1]$ cp ~/backup/cold/control01.ctl .
+SYS@PROD1>startup
+Database mounted.
+ORA-01122: database file 1 failed verification check
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+ORA-01207: file is more recent than control file - old control file
+---> 컨트롤 파일이 올드하다네
+
+리커버해보자.
+SYS@PROD1>recover database using backup controlfile
+ORA-00279: change 3782691 generated at 06/25/2020 11:04:02 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_5_1044008568.arc
+ORA-00280: change 3782691 for thread 1 is in sequence #5
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+auto
+ORA-00279: change 3783544 generated at 06/25/2020 11:07:27 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_6_1044008568.arc
+ORA-00280: change 3783544 for thread 1 is in sequence #6
+ORA-00278: log file '/home/oracle/arch1/arch_1_5_1044008568.arc' no longer needed for this recovery
+
+ORA-00279: change 3783547 generated at 06/25/2020 11:07:28 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_7_1044008568.arc
+ORA-00280: change 3783547 for thread 1 is in sequence #7
+ORA-00278: log file '/home/oracle/arch1/arch_1_6_1044008568.arc' no longer needed for this recovery
+
+ORA-00279: change 3783550 generated at 06/25/2020 11:07:30 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_8_1044008568.arc
+ORA-00280: change 3783550 for thread 1 is in sequence #8
+ORA-00278: log file '/home/oracle/arch1/arch_1_7_1044008568.arc' no longer needed for this recovery
+
+ORA-00308: cannot open archived log '/home/oracle/arch1/arch_1_8_1044008568.arc'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+여기서 멈추네.. 리두로그 파일을 입력해주고 넘어가도록 하자.
+SYS@PROD1>recover database using backup controlfile
+ORA-00279: change 3783598 generated at 06/25/2020 11:32:53 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_9_1044008568.arc
+ORA-00280: change 3783598 for thread 1 is in sequence #9
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+/u01/app/oracle/oradata/PROD1/redo03.log  < --  이파일의 위치를 안건 ??
+ORA-00283: recovery session canceled due to errors
+ORA-01244: unnamed datafile(s) added to control file by media recovery
+ORA-01110: data file 5: '/u01/app/oracle/oradata/PROD1/data01.dbf'
+---> 새로운 데이터파일에 대해서는 복구가 안됬다.
+ORA-01112: media recovery not started
+
+SYS@PROD1>alter database backup controlfile to trace as '/home/oracle/z.sql';
+Database altered.
+
+SYS@PROD1>@z.sql
+
+SYS@PROD1>select a.file#, b.name bn, a.name, a.status from v$datafile a, v$tablespace b where a.ts#=b.ts#;
+     FILE# BN	      NAME						 STATUS
+---------- ---------- -------------------------------------------------- -------
+	 1 SYSTEM     /u01/app/oracle/oradata/PROD1/system01.dbf	 SYSTEM
+	 3 SYSAUX     /u01/app/oracle/oradata/PROD1/sysaux01.dbf	 ONLINE
+	 4 UNDOTBS1   /u01/app/oracle/oradata/PROD1/undotbs01.dbf	 ONLINE
+	 6 USERS      /u01/app/oracle/oradata/PROD1/users01.dbf 	 ONLINE
+	 5 DATA_TBS   /u01/app/oracle/product/12.1.0/dbhome_1/dbs/UNNAME RECOVER
+data_tbs 의 데이터파일이 이상한 이름으로 만들어졌다. 원래 이름으로 변경하도록 하자.
+SYS@PROD1>alter database rename file '/u01/app/oracle/product/12.1.0/dbhome_1/dbs/UNNAMED00005' to '$ORACLE_BASE/oradata/PROD1/data01.dbf';
+
+SYS@PROD1>select a.file#, b.name bn, a.name, a.status from v$datafile a, v$tablespace b where a.ts#=b.ts#;
+     FILE# BN	      NAME						 STATUS
+---------- ---------- -------------------------------------------------- -------
+	 1 SYSTEM     /u01/app/oracle/oradata/PROD1/system01.dbf	 SYSTEM
+	 3 SYSAUX     /u01/app/oracle/oradata/PROD1/sysaux01.dbf	 ONLINE
+	 4 UNDOTBS1   /u01/app/oracle/oradata/PROD1/undotbs01.dbf	 ONLINE
+	 6 USERS      /u01/app/oracle/oradata/PROD1/users01.dbf 	 ONLINE
+	 5 DATA_TBS   /u01/app/oracle/oradata/PROD1/data01.dbf		 RECOVER
+
+그리고 복구를 마져하자.
+SYS@PROD1>recover database using backup controlfile
+ORA-00279: change 3783618 generated at 06/25/2020 11:33:24 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_9_1044008568.arc
+ORA-00280: change 3783618 for thread 1 is in sequence #9
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+/u01/app/oracle/oradata/PROD1/redo03.log  <- 아까 입력했던 리두로그 파일을 다시입력하자.
+Log applied.
+Media recovery complete.
+
+SYS@PROD1>alter database open resetlogs;
+
+SYS@PROD1>select a.file#, b.name bn, a.name, a.status from v$datafile a, v$tablespace b where a.ts#=b.ts#;
+     FILE# BN	      NAME						 STATUS
+---------- ---------- -------------------------------------------------- -------
+	 1 SYSTEM     /u01/app/oracle/oradata/PROD1/system01.dbf	 SYSTEM
+	 3 SYSAUX     /u01/app/oracle/oradata/PROD1/sysaux01.dbf	 ONLINE
+	 4 UNDOTBS1   /u01/app/oracle/oradata/PROD1/undotbs01.dbf	 ONLINE
+	 5 DATA_TBS   /u01/app/oracle/oradata/PROD1/data01.dbf		 ONLINE
+	 6 USERS      /u01/app/oracle/oradata/PROD1/users01.dbf 	 ONLINE
+
+최종 데이터 확인 ( 복구 완료 )
+SYS@PROD1>select count(*) from scott.dept_n;
+  COUNT(*)
+----------
+	27
+
+
+#24. Drop 한 테이블을 템프디비로 부터 복구
+
+템프디비 만드는방법
+임시디렉토리만들고 거기에 파일(컨,데,리) 복사해넣고 pfile 을 수정하여 컨트롤의위치를 바꿔준후 startup mount 시킨후에 파일(데,리)경로 변경후 open
+
+
+SYS@PROD1>create table scott.emp_n tablespace users as select * from hr.employees;
+Table created.
+
+SYS@PROD1>select count(*) from scott.emp_n;
+
+  COUNT(*)
+----------
+       107
+
+사용자의 실수발생
+SYS@PROD1> drop table scott.emp_n purge; 
+Table dropped.
+
+SYS@PROD1>select a.group#, b.sequence#, a.member, b.bytes/1024/1024 MB,b.archived, b.status from v$logfile a, v$log b  where a.group#=b.group#;
+    GROUP#  SEQUENCE# MEMBER						  MB ARC STATUS
+---------- ---------- ------------------------------------------- ---------- --- 
+	 2	    5 /u01/app/oracle/oradata/PROD1/redo02.log		  50 NO  CURRENT
+	 1	    4 /u01/app/oracle/oradata/PROD1/redo01.log		  50 YES INACTIVE
+	 3	    3 /u01/app/oracle/oradata/PROD1/redo03.log		  50 YES INACTIVE
+
+로그마이너를 통해서 사고 발생시점 파악하기
+SYS@PROD1>
+begin
+dbms_logmnr.add_logfile(logfilename => '/u01/app/oracle/oradata/PROD1/redo01.log', options=> dbms_logmnr.new);
+dbms_logmnr.add_logfile(logfilename => '/u01/app/oracle/oradata/PROD1/redo02.log', options=> dbms_logmnr.addfile);
+dbms_logmnr.add_logfile(logfilename => '/u01/app/oracle/oradata/PROD1/redo03.log', options=> dbms_logmnr.addfile);
+end;
+/
+PL/SQL procedure successfully completed.
+
+
+SYS@PROD1>select db_name, filename from v$logmnr_logs;
+DB_NAME  FILENAME
+-------- ----------------------------------------
+PROD1	 /u01/app/oracle/oradata/PROD1/redo03.log
+PROD1	 /u01/app/oracle/oradata/PROD1/redo01.log
+PROD1	 /u01/app/oracle/oradata/PROD1/redo02.log
+
+SYS@PROD1>
+begin
+dbms_logmnr.start_logmnr(options=>dbms_logmnr.dict_from_online_catalog);
+end;
+/
+
+SYS@PROD1>select to_char(timestamp, 'yyyy-mm-dd hh24:mi:ss') ti_stamp, operation, sql_redo
+ from v$logmnr_contents where seg_name='EMP_N'
+TI_STAMP	    OPERATION
+------------------- --------------------------------
+SQL_REDO
+2020-06-25 13:52:19 DDL
+create table scott.emp_n tablespace users as select * from hr.employees;
+
+2020-06-25 13:53:39 DDL
+ drop table scott.emp_n purge;
+----> 사고발생시점은  2020-06-25 13:53:39
+
+로그마이너 종료
+SYS@PROD1>exec dbms_logmnr.end_logmnr;
+PL/SQL procedure successfully completed.
+
+템프디비를 구성하기위해 pfile 을 만든다.
+SYS@PROD1>create pfile from spfile;
+File created.
+
+pfile 을 확인한다.
+SYS@PROD1>!ls $ORACLE_HOME/dbs
+backup		hc_orcl.dat   hc_prod.dat  initorcl.ora   lkORCL	orapworcl	   spfileorcl.ora
+hc_em12rep.dat	hc_p1.dat     hc_PROD.dat  initPROD1.ora  lkPROD1	orapwPROD1	   spfilePROD1.ora
+hc_hong.dat	hc_PROD1.dat  init.ora	   lkEM12REP	  orapwem12rep	spfileem12rep.ora
+
+서버를 끈다.
+SYS@PROD1>shutdown immediate
+
+# 템프 디렉토리구성
+데이터파일은 콜드백업에서 가져오고
+트롤파일과 리두로그파일은 PROD1 에서 가져온다.
+
+[oracle@edydr1p1 ~]$ mkdir /home/oracle/temp
+[oracle@edydr1p1 temp]$ rsync -av ../backup/cold/*.dbf .
+[oracle@edydr1p1 temp]$ cp /u01/app/oracle/oradata/PROD1/control01.ctl .
+[oracle@edydr1p1 temp]$ cp /u01/app/oracle/oradata/PROD1/*.log .
+
+pfile 을 수정
+[oracle@edydr1p1 ~]$ cd $ORACLE_HOME/dbs
+[oracle@edydr1p1 dbs]$ vi initPROD1.ora 
+바뀐 경로에 맞게 수정
+*.compatible='12.1.0.2.0'
+*.control_files='/home/oracle/temp/control01.ctl' 
+*.db_block_size=8192
+..
+
+
+pfile 로 startup
+SYS@PROD1>startup pfile=$ORACLE_HOME/dbs/initPROD1.ora mount
+
+# database datafile rename & 복구에 필요하지 않은 파일 offline
+SYS@PROD1>select name, status from v$datafile;
+NAME						   STATUS
+-------------------------------------------------- -------
+/u01/app/oracle/oradata/PROD1/system01.dbf	   SYSTEM
+/u01/app/oracle/oradata/PROD1/sysaux01.dbf	   ONLINE
+/u01/app/oracle/oradata/PROD1/undotbs01.dbf	   ONLINE
+/u01/app/oracle/oradata/PROD1/data01.dbf	   ONLINE
+/u01/app/oracle/oradata/PROD1/users01.dbf	   ONLINE
+
+SYS@PROD1>
+alter database rename file '/u01/app/oracle/oradata/PROD1/system01.dbf' to  '/home/oracle/temp/system01.dbf';
+alter database rename file '/u01/app/oracle/oradata/PROD1/sysaux01.dbf' to '/home/oracle/temp/sysaux01.dbf';
+alter database rename file '/u01/app/oracle/oradata/PROD1/undotbs01.dbf' to '/home/oracle/temp/undotbs01.dbf';
+alter database rename file '/u01/app/oracle/oradata/PROD1/data01.dbf' to '/home/oracle/temp/data01.dbf';
+alter database rename file '/u01/app/oracle/oradata/PROD1/users01.dbf' to '/home/oracle/temp/users01.dbf';
+
+데이터 파일의 경로가 모두 바뀌었다.
+SYS@PROD1>select name, status from v$datafile;
+NAME						   STATUS
+-------------------------------------------------- -------
+/home/oracle/temp/system01.dbf			   SYSTEM
+/home/oracle/temp/sysaux01.dbf			   ONLINE
+/home/oracle/temp/undotbs01.dbf 		   ONLINE
+/home/oracle/temp/data01.dbf			   ONLINE
+/home/oracle/temp/users01.dbf			   ONLINE
+
+리두로그 파일의 경로도 바꾸자.
+SYS@PROD1>select member from v$logfile;
+MEMBER
+-------------------------------------------
+/u01/app/oracle/oradata/PROD1/redo02.log
+/u01/app/oracle/oradata/PROD1/redo01.log
+/u01/app/oracle/oradata/PROD1/redo03.log
+
+SYS@PROD1>alter database rename file '/u01/app/oracle/oradata/PROD1/redo02.log' to '/home/oracle/temp/redo02.log';
+SYS@PROD1>alter database rename file '/u01/app/oracle/oradata/PROD1/redo01.log' to '/home/oracle/temp/redo01.log';
+SYS@PROD1>alter database rename file '/u01/app/oracle/oradata/PROD1/redo03.log' to '/home/oracle/temp/redo03.log';
+
+# drop table 이전 시점까지 복구 후 db resetlogs로 open
+
+SYS@PROD1>alter session set nls_date_format='yyyy/mm/dd hh24:mi:ss';
+drop 시점보다 1초전까지 복구하는걸로 했는데… 정각으로 하면 어떻게될까?
+SYS@PROD1>recover database until time '2020-06-25 13:53:38';
+ORA-00279: change 3783657 generated at 06/25/2020 11:53:38 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_1_1044014017.arc
+ORA-00280: change 3783657 for thread 1 is in sequence #1
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+AUTO
+ORA-00279: change 3884906 generated at 06/25/2020 12:04:24 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch1/arch_1_2_1044014017.arc
+ORA-00280: change 3884906 for thread 1 is in sequence #2
+
+Log applied.
+Media recovery complete.
+
+SYS@PROD1>alter database open resetlogs;
+Database altered.
+
+SYS@PROD1>select count(*) from scott.emp_n;
+  COUNT(*)
+----------
+       107
+
+이 테이블을 파일로 덤프받는다.
+[oracle@edydr1p1 temp]$ exp scott/tiger tables=emp_n file=emp_n.dmp
+
+이제 껐다 켜자. spfile 로 켜질것이다.
+SYS@PROD1>shutdown abort
+ORACLE instance shut down.
+SYS@PROD1>startup mount
+
+데이터파일과 리두로그파일의 경로를 확인해보자. 원래대로 돌아와있다.
+SYS@PROD1>select name,status from v$datafile;
+NAME					      STATUS
+--------------------------------------------- -------
+/u01/app/oracle/oradata/PROD1/system01.dbf    SYSTEM
+/u01/app/oracle/oradata/PROD1/sysaux01.dbf    ONLINE
+/u01/app/oracle/oradata/PROD1/undotbs01.dbf   ONLINE
+/u01/app/oracle/oradata/PROD1/data01.dbf      ONLINE
+/u01/app/oracle/oradata/PROD1/users01.dbf     ONLINE
+
+SYS@PROD1>select member from v$logfile;
+MEMBER
+----------------------------------------
+/u01/app/oracle/oradata/PROD1/redo02.log
+/u01/app/oracle/oradata/PROD1/redo01.log
+/u01/app/oracle/oradata/PROD1/redo03.log
+
+SYS@PROD1>alter database open;
+imp 로 복구해보자.
+[oracle@edydr1p1 temp]$ imp scott/tiger tables=emp_n file=emp_n.dmp
+복구완료된것을 확인할수있다.
+SYS@PROD1>select count(*) from scott.emp_n;
+  COUNT(*)
+----------
+       107
+RMAN
+ASM :  오라클에서 제공하는 소프트웨어적인 데이터 이중화 백업방법
+Fast Recovery Area  : RMAN 이 사용하는 공간 ( Flash Recovery Area 라고 부르기도함 )
+
+SYS@PROD1>show parameter db_recovery_file_dest;
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+db_recovery_file_dest		     string
+db_recovery_file_dest_size	     big integer 0
+
+SYS@PROD1>alter system set db_recovery_file_dest_size=2G;
+
+디렉토리를 하나 만들고
+[oracle@edydr1p1 ~]$ mkdir fast_recovery_area
+
+그 디렉토리를 FRA 로 지정한다.
+SYS@PROD1>alter system set db_recovery_file_dest='/home/oracle/fast_recovery_area';
+
+파라미터를 확인해보자.
+SYS@PROD1>show parameter db_recovery_file_dest;
+NAME				     TYPE	 VALUE
+------------------------------------ ----------- ------------------------------
+db_recovery_file_dest		     string	 /home/oracle/fast_recovery_area
+db_recovery_file_dest_size	     big integer 2G
+
+이 디렉토리도 만들자.
+[oracle@edydr1p1 ~]$ mkdir -p backup/rman
+
+RMAN 을 실행하자. ( OS 인증으로 sys 로 접속한다 )
+[oracle@edydr1p1 ~]$ rman target /
+Recovery Manager: Release 12.1.0.2.0 - Production on Wed Jul 1 11:01:25 2020
+Copyright (c) 1982, 2014, Oracle and/or its affiliates.  All rights reserved.
+connected to target database: PROD1 (DBID=2264500624)
+
+(백업정책에 관련된) 설정되어있는 모든것을 보여준다.
+RMAN> show all;
+using target database control file instead of recovery catalog
+RMAN configuration parameters for database with db_unique_name PROD1 are:
+CONFIGURE RETENTION POLICY TO REDUNDANCY 1; # default
+CONFIGURE BACKUP OPTIMIZATION OFF; # default  -- 증분, 전체
+CONFIGURE DEFAULT DEVICE TYPE TO DISK; # default -- 디바이스 타입
+CONFIGURE CONTROLFILE AUTOBACKUP OFF; # default -- 컨트롤 파일 저장여부
+CONFIGURE CONTROLFILE AUTOBACKUP FORMAT FOR DEVICE TYPE DISK TO '%F'; # default
+CONFIGURE DEVICE TYPE DISK PARALLELISM 1 BACKUP TYPE TO BACKUPSET; # default
+CONFIGURE DATAFILE BACKUP COPIES FOR DEVICE TYPE DISK TO 1; # default
+CONFIGURE ARCHIVELOG BACKUP COPIES FOR DEVICE TYPE DISK TO 1; # default
+CONFIGURE MAXSETSIZE TO UNLIMITED; # default
+CONFIGURE ENCRYPTION FOR DATABASE OFF; # default
+CONFIGURE ENCRYPTION ALGORITHM 'AES128'; # default
+CONFIGURE COMPRESSION ALGORITHM 'BASIC' AS OF RELEASE 'DEFAULT' OPTIMIZE FOR LOAD TRUE ; # default
+CONFIGURE RMAN OUTPUT TO KEEP FOR 7 DAYS; # default
+CONFIGURE ARCHIVELOG DELETION POLICY TO NONE; # default
+CONFIGURE SNAPSHOT CONTROLFILE NAME TO '/u01/app/oracle/product/12.1.0/dbhome_1/dbs/snapcf_PROD1.f'; # default
+
+항목에 #default 라고 되어있는것은 설정을 바꾸지 않았다는것이다.
+
+설정을 변경해보자. 디폴트 백업 디바이스 설정
+RMAN> configure default device type to disk;
+
+백업저장경로 형식 지정 ( %U : 16진수 유니크값, %T : YYYYMMDD )
+RMAN> configure channel device type disk format '/home/oracle/backup/rman/%U_%T';
+
+백업시마다 컨트롤파일을 자동백업하겠다.
+RMAN> configure controlfile autobackup on;
+
+컨트롤 파일 저장 포맷 명시 (%F : DBID )
+RMAN> configure controlfile autobackup format for device type disk to '/home/oracle/backup/rman/%F';
+
+RMAN> show all;
+
+RMAN configuration parameters for database with db_unique_name PROD1 are:
+CONFIGURE RETENTION POLICY TO REDUNDANCY 1; # default
+CONFIGURE BACKUP OPTIMIZATION OFF; # default
+CONFIGURE DEFAULT DEVICE TYPE TO DISK;
+CONFIGURE CONTROLFILE AUTOBACKUP ON;
+CONFIGURE CONTROLFILE AUTOBACKUP FORMAT FOR DEVICE TYPE DISK TO '/home/oracle/backup/rman/%F';
+CONFIGURE DEVICE TYPE DISK PARALLELISM 1 BACKUP TYPE TO BACKUPSET; # default
+CONFIGURE DATAFILE BACKUP COPIES FOR DEVICE TYPE DISK TO 1; # default
+CONFIGURE ARCHIVELOG BACKUP COPIES FOR DEVICE TYPE DISK TO 1; # default
+CONFIGURE CHANNEL DEVICE TYPE DISK FORMAT   '/home/oracle/backup/rman/%U_%T';
+CONFIGURE MAXSETSIZE TO UNLIMITED; # default
+CONFIGURE ENCRYPTION FOR DATABASE OFF; # default
+CONFIGURE ENCRYPTION ALGORITHM 'AES128'; # default
+CONFIGURE COMPRESSION ALGORITHM 'BASIC' AS OF RELEASE 'DEFAULT' OPTIMIZE FOR LOAD TRUE ; # default
+CONFIGURE RMAN OUTPUT TO KEEP FOR 7 DAYS; # default
+CONFIGURE ARCHIVELOG DELETION POLICY TO NONE; # default
+CONFIGURE SNAPSHOT CONTROLFILE NAME TO '/u01/app/oracle/product/12.1.0/dbhome_1/dbs/snapcf_PROD1.f'; # default
+
+
+
+
+
+
+
+
+
+
+
+백업유형
+인크리멘털 레벨0 = 전체백업
+cumulative 백업 = 풀백업이후의 모든 변경사항들을 백업하는것
+
+백업 받기
+RMAN> backup database;
+
+Starting backup at 01-JUL-20
+using target database control file instead of recovery catalog
+allocated channel: ORA_DISK_1
+channel ORA_DISK_1: SID=255 device type=DISK
+channel ORA_DISK_1: starting full datafile backup set
+channel ORA_DISK_1: specifying datafile(s) in backup set
+input datafile file number=00001 name=/u01/app/oracle/oradata/PROD1/system01.dbf
+input datafile file number=00003 name=/u01/app/oracle/oradata/PROD1/sysaux01.dbf
+input datafile file number=00004 name=/u01/app/oracle/oradata/PROD1/undotbs01.dbf
+input datafile file number=00005 name=/u01/app/oracle/oradata/PROD1/data01.dbf
+input datafile file number=00006 name=/u01/app/oracle/oradata/PROD1/users01.dbf
+channel ORA_DISK_1: starting piece 1 at 01-JUL-20
+channel ORA_DISK_1: finished piece 1 at 01-JUL-20
+piece handle=/home/oracle/backup/rman/01v477h4_1_1_20200701 tag=TAG20200701T115308 comment=NONE
+channel ORA_DISK_1: backup set complete, elapsed time: 00:00:25
+Finished backup at 01-JUL-20
+
+Starting Control File and SPFILE Autobackup at 01-JUL-20
+piece handle=/home/oracle/backup/rman/c-2264500624-20200701-00 comment=NONE
+Finished Control File and SPFILE Autobackup at 01-JUL-20
+
+백업 확인하기  ( 풀백업 된걸 확인 )
+RMAN> list backup;
+
+List of Backup Sets
+===================
+BS Key  Type LV Size       Device Type Elapsed Time Completion Time
+------- ---- -- ---------- ----------- ------------ ---------------
+1       Full    1.21G      DISK        00:00:19     01-JUL-20      
+        BP Key: 1   Status: AVAILABLE  Compressed: NO  Tag: TAG20200701T115308
+        Piece Name: /home/oracle/backup/rman/01v477h4_1_1_20200701
+  List of Datafiles in backup set 1
+  File LV Type Ckp SCN    Ckp Time  Name
+  ---- -- ---- ---------- --------- ----
+  1       Full 4127115    01-JUL-20 /u01/app/oracle/oradata/PROD1/system01.dbf
+  3       Full 4127115    01-JUL-20 /u01/app/oracle/oradata/PROD1/sysaux01.dbf
+  4       Full 4127115    01-JUL-20 /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+  5       Full 4127115    01-JUL-20 /u01/app/oracle/oradata/PROD1/data01.dbf
+  6       Full 4127115    01-JUL-20 /u01/app/oracle/oradata/PROD1/users01.dbf
+
+BS Key  Type LV Size       Device Type Elapsed Time Completion Time
+------- ---- -- ---------- ----------- ------------ ---------------
+2       Full    9.95M      DISK        00:00:00     01-JUL-20      
+        BP Key: 2   Status: AVAILABLE  Compressed: NO  Tag: TAG20200701T115333
+        Piece Name: /home/oracle/backup/rman/c-2264500624-20200701-00
+  SPFILE Included: Modification time: 01-JUL-20
+  SPFILE db_unique_name: PROD1
+  Control File Included: Ckp SCN: 4127154      Ckp time: 01-JUL-20
+
+백업디렉토리에 생성된 파일 확인해보기
+[oracle@edydr1p1 rman]$ ll
+total 1277084
+-rw-r----- 1 oracle oinstall 1297276928 Jul  1 11:53 01v477h4_1_1_20200701
+-rw-r----- 1 oracle oinstall   10452992 Jul  1 11:53 c-2264500624-20200701-00
+
+
+# RMAN  시나리오2.  전체백업
+[oracle@edydr1p1 ~]$ mkdir -p backup/rman/copy
+
+백업하기
+RMAN> run{
+2> allocate channel c1 type disk format '/home/oracle/backup/rman/copy/%U';
+3> backup as copy database;
+4> }
+
+[oracle@edydr1p1 copy]$ ls -lhS
+total 1.7G
+-rw-r----- 791M  13:36 data_D-PROD1_I-2264500624_TS-SYSTEM_FNO-1_03v47dib
+-rw-r----- 741M  13:36 data_D-PROD1_I-2264500624_TS-SYSAUX_FNO-3_04v47dir
+-rw-r----- 156M  13:36 data_D-PROD1_I-2264500624_TS-UNDOTBS1_FNO-4_05v47dja
+-rw-r----- 5.1M  13:36 data_D-PROD1_I-2264500624_TS-DATA_TBS_FNO-5_06v47djb
+-rw-r----- 5.1M  13:36 data_D-PROD1_I-2264500624_TS-USERS_FNO-6_07v47djc
+
+이미지 카피형식의 백업파일 체크
+RMAN> list datafilecopy all;
+
+List of Datafile Copies
+=======================
+Key     File S Completion Time Ckp SCN    Ckp Time       
+------- ---- - --------------- ---------- ---------------
+1       1    A 01-JUL-20       4133375    01-JUL-20      
+        Name: /home/oracle/backup/rman/copy/data_D-PROD1_I-2264500624_TS-SYSTEM_FNO-1_03v47dib
+        Tag: TAG20200701T133611
+2       3    A 01-JUL-20       4133381    01-JUL-20      
+        Name: /home/oracle/backup/rman/copy/data_D-PROD1_I-2264500624_TS-SYSAUX_FNO-3_04v47dir
+        Tag: TAG20200701T133611
+
+3       4    A 01-JUL-20       4133389    01-JUL-20      
+        Name: /home/oracle/backup/rman/copy/data_D-PROD1_I-2264500624_TS-UNDOTBS1_FNO-4_05v47dja
+        Tag: TAG20200701T133611
+
+4       5    A 01-JUL-20       4133391    01-JUL-20      
+        Name: /home/oracle/backup/rman/copy/data_D-PROD1_I-2264500624_TS-DATA_TBS_FNO-5_06v47djb
+        Tag: TAG20200701T133611
+
+5       6    A 01-JUL-20       4133415    01-JUL-20      
+        Name: /home/oracle/backup/rman/copy/data_D-PROD1_I-2264500624_TS-USERS_FNO-6_07v47djc
+        Tag: TAG20200701T133611
+
+
+아카이브 파일 확인
+RMAN> list archivelog all;
+
+List of Archived Log Copies for database with db_unique_name PROD1
+=====================================================================
+
+Key     Thrd Seq     S Low Time 
+------- ---- ------- - ---------
+1       1    15      A 24-JUN-20
+        Name: /home/oracle/arch1/arch_1_15_1043925304.arc
+
+2       1    16      A 24-JUN-20
+        Name: /home/oracle/arch1/arch_1_16_1043925304.arc
+
+
+DML & DDL  작업
+SYS@PROD1>create table scott.test(id number);
+SYS@PROD1>insert into scott.test values (1);
+SYS@PROD1>commit;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>/
+SYS@PROD1>/
+
+장애상황 발생
+[oracle@edydr1p1 ~]$ rm  $ORACLE_BASE/oradata/PROD1/*.dbf
+
+RMAN> list failure
+Database Role: PRIMARY
+
+List of Database Failures
+=========================
+
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+622        CRITICAL OPEN      18-JUN-20     System datafile 1: '/u01/app/oracle/oradata/PROD1/system01.dbf' needs media recovery
+340        CRITICAL OPEN      16-JUN-20     System datafile 1: '/u01/app/oracle/oradata/NEW_PROD1/system01.dbf' is missing
+200        CRITICAL OPEN      16-JUN-20     System datafile 1: '/u01/app/oracle/oradata/PROD1/system01.dbf' is missing
+2          HIGH     OPEN      15-JUN-20     One or more non-system datafiles are missing
+6180       HIGH     OPEN      25-JUN-20     Name for datafile 5 is unknown in the control file
+42         HIGH     OPEN      15-JUN-20     One or more non-system datafiles need media recovery
+
+Failure ID 2번에 대해 자세히 보자.
+RMAN> list failure 2 detail;
+
+Database Role: PRIMARY
+
+List of Database Failures
+=========================
+
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+2          HIGH     OPEN      15-JUN-20     One or more non-system datafiles are missing
+  Impact: See impact for individual child failures
+  List of child failures for parent failure ID 2
+  Failure ID Priority Status    Time Detected Summary
+  ---------- -------- --------- ------------- -------
+  7240       HIGH     OPEN      01-JUL-20     Datafile 5: '/u01/app/oracle/oradata/PROD1/data01.dbf' is missing
+    Impact: Some objects in tablespace DATA_TBS might be unavailable
+  364        HIGH     OPEN      16-JUN-20     Datafile 6: '/u01/app/oracle/oradata/NEW_PROD1/users01.dbf' is missing
+    Impact: Some objects in tablespace USERS might be unavailable
+  358        HIGH     OPEN      16-JUN-20     Datafile 5: '/u01/app/oracle/oradata/NEW_PROD1/example01.dbf' is missing
+    Impact: Some objects in tablespace EXAMPLE might be unavailable
+  352        HIGH     OPEN      16-JUN-20     Datafile 4: '/u01/app/oracle/oradata/NEW_PROD1/undotbs01.dbf' is missing
+    Impact: Some objects in tablespace UNDOTBS1 might be unavailable
+  346        HIGH     OPEN      16-JUN-20     Datafile 3: '/u01/app/oracle/oradata/NEW_PROD1/sysaux01.dbf' is missing
+    Impact: Some objects in tablespace SYSAUX might be unavailable
+  218        HIGH     OPEN      16-JUN-20     Datafile 5: '/u01/app/oracle/oradata/PROD1/example01.dbf' is missing
+    Impact: Some objects in tablespace EXAMPLE might be unavailable
+  212        HIGH     OPEN      16-JUN-20     Datafile 4: '/u01/app/oracle/oradata/PROD1/undotbs01.dbf' is missing
+    Impact: Some objects in tablespace UNDOTBS1 might be unavailable
+  206        HIGH     OPEN      16-JUN-20     Datafile 3: '/u01/app/oracle/oradata/PROD1/sysaux01.dbf' is missing
+    Impact: Some objects in tablespace SYSAUX might be unavailable
+  5          HIGH     OPEN      15-JUN-20     Datafile 6: '/u01/app/oracle/oradata/PROD1/users01.dbf' is missing
+    Impact: Some objects in tablespace USERS might be unavailable
+
+RMAN> shutdown abort;
+Oracle instance shut down
+
+RMAN> startup mount;
+connected to target database (not started)
+Oracle instance started
+database mounted
+
+Total System Global Area    1241513984 bytes
+
+Fixed Size                     2923872 bytes
+Variable Size                452985504 bytes
+Database Buffers             771751936 bytes
+Redo Buffers                  13852672 bytes
+
+
+restor 에 필요한 파일들 확인하자.
+RMAN> restore database preview summary;
+...
+30      1    13      A 01-JUL-20
+        Name: /home/oracle/arch1/arch_1_13_1044014017.arc
+
+31      1    14      A 01-JUL-20
+        Name: /home/oracle/arch1/arch_1_14_1044014017.arc
+
+RMAN-05119: recovery can not be done to a consistent state.
+Media recovery start SCN is 4133375
+Recovery must be done beyond SCN 4133415 to clear datafile fuzziness
+Finished restore at 01-JUL-20
+
+restore( 백업한 파일을 가져오기 ) 한다. 그러면 PROD1 디렉토리로 백업파일이 가져와진다.
+RMAN> restore database;
+
+리커버한다.
+RMAN> recover database;
+
+OPEN 한다.
+RMAN> alter database open;
+Statement processed
+
+백업파일 목록 보기
+RMAN> list datafilecopy all;
+
+백업파일 모두 지우기 ( 진짜로 지울건지 물어보는데 yes 라고 하면 지워진다 )
+RMAN> delete datafilecopy all;
+
+
+
+# RMAN 시나리오3.  Incremental backup
+
+RMAN> delete backupset; 
+이렇게 하면 지울건지 물어보는데 yes 라고 하면 삭제가된다.
+
+백업이 필요한것이 무엇인지 확인한다.
+RMAN> report need backup;
+
+백업받은게 있나?
+RMAN> list backup;
+specification does not match any backup in the repository
+
+백업하자.
+RMAN> run {
+2> allocate channel c1 type disk;
+3> allocate channel c2 type disk;
+4> backup incremental level 0 database;
+5> }
+
+백업한거 확인하자.
+RMAN> list backup;
+
+SYS@PROD1>alter database enable block change tracking using file '/home/oracle/backup/rman/block_tracking.txt';
+
+[oracle@edydr1p1 rman]$ ll
+total 1288660
+-rw-r----- 1 oracle oinstall 1297522688 Jul  1 14:32 09v47gqv_1_1_20200701
+-rw-r----- 1 oracle oinstall   11600384 Jul  1 14:35 block_tracking.txt
+-rw-r----- 1 oracle oinstall   10452992 Jul  1 14:32 c-2264500624-20200701-02
+drwxr-xr-x 2 oracle oinstall       4096 Jul  1 13:58 copy
+
+SYS@PROD1>select status, filename, bytes/1024/1024 MB from v$block_change_tracking;
+STATUS	   FILENAME						      MB
+---------- -------------------------------------------------- ----------
+ENABLED    /home/oracle/backup/rman/block_tracking.txt		 11.0625
+
+DML & DDL 작업을 한다.
+SYS@PROD1>update hr.employees set salary=salary*1.1 where department_id=20;
+SYS@PROD1>create table hr.inc_emp as select * from hr.employees;
+SYS@PROD1>delete from hr.inc_emp where department_id=50;
+SYS@PROD1>commit;
+
+
+RMAN 에서 Incremental 백업을 수행하자.
+RMAN> run {
+2> allocate channel c1 type disk;
+3> backup incremental level 1 database;
+4> }
+
+
+[oracle@edydr1p1 rman]$ ll
+total 1299820
+-rw-r----- 1 oracle oinstall 1297522688 Jul  1 14:32 09v47gqv_1_1_20200701
+-rw-r----- 1 oracle oinstall     974848 Jul  1 14:46 0bv47hm4_1_1_20200701
+-rw-r----- 1 oracle oinstall   11600384 Jul  1 14:47 block_tracking.txt
+파일이 생겼다..
+
+백업 목록 확인한다. ( level 0, 1, .. 확인할수있다 )
+RMAN> list backup;
+
+장애발생
+[oracle@edydr1p1 copy]$ rm /u01/app/oracle/oradata/PROD1/users01.dbf
+SYS@PROD1>alter system checkpoint;
+SYS@PROD1>/
+SYS@PROD1>/
+SYS@PROD1>/
+
+
+RMAN> list failure;
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+2          HIGH     OPEN      15-JUN-20     One or more non-system datafiles are missing
+42         HIGH     OPEN      15-JUN-20     One or more non-system datafiles need media recovery
+
+RMAN> list failure 2 detail;
+Database Role: PRIMARY
+List of Database Failures
+=========================
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+2          HIGH     OPEN      15-JUN-20     One or more non-system datafiles are missing
+  Impact: See impact for individual child failures
+  List of child failures for parent failure ID 2
+  Failure ID Priority Status    Time Detected Summary
+  ---------- -------- --------- ------------- -------
+  364        HIGH     OPEN      16-JUN-20     Datafile 6: '/u01/app/oracle/oradata/NEW_PROD1/users01.dbf' is missing
+    Impact: Some objects in tablespace USERS might be unavailable
+  5          HIGH     OPEN      15-JUN-20     Datafile 6: '/u01/app/oracle/oradata/PROD1/users01.dbf' is missing
+    Impact: Some objects in tablespace USERS might be unavailable
+
+users 테이블스페이스를 오프라인으로 
+RMAN> alter tablespace users offline immediate;
+RMAN> restore tablespace users;
+RMAN> recover tablespace users;
+RMAN> alter tablespace users online;
+
+
+
+
+# RMAN 시나리오4. 멀티섹션 백업 ( 분할 압축 백업 )
+
+RMAN> backup as compressed backupset section size 100M tablespace system;
+...
+  List of Datafiles in backup set 8
+  File LV Type Ckp SCN    Ckp Time  Name
+  ---- -- ---- ---------- --------- ----
+  1       Full 4340477    01-JUL-20 /u01/app/oracle/oradata/PROD1/system01.dbf
+
+  Backup Set Copy #1 of backup set 8
+  Device Type Elapsed Time Completion Time Compressed Tag
+  ----------- ------------ --------------- ---------- ---
+  DISK        00:00:21     01-JUL-20       YES        TAG20200701T150618
+
+    List of Backup Pieces for backup set 8 Copy #1
+    BP Key  Pc# Status      Piece Name
+    ------- --- ----------- ----------
+    8       1   AVAILABLE   /home/oracle/backup/rman/0dv47ira_1_1_20200701
+    9       2   AVAILABLE   /home/oracle/backup/rman/0dv47ira_2_1_20200701
+    10      3   AVAILABLE   /home/oracle/backup/rman/0dv47ira_3_1_20200701
+    11      4   AVAILABLE   /home/oracle/backup/rman/0dv47ira_4_1_20200701
+    12      5   AVAILABLE   /home/oracle/backup/rman/0dv47ira_5_1_20200701
+    13      6   AVAILABLE   /home/oracle/backup/rman/0dv47ira_6_1_20200701
+    14      7   AVAILABLE   /home/oracle/backup/rman/0dv47ira_7_1_20200701
+    15      8   AVAILABLE   /home/oracle/backup/rman/0dv47ira_8_1_20200701
+
+BS Key  Type LV Size       Device Type Elapsed Time Completion Time
+------- ---- -- ---------- ----------- ------------ ---------------
+9       Full    9.95M      DISK        00:00:01     01-JUL-20      
+
+
+# RMAN 시나리오5. 백업파일을 임의로 지웠을때
+
+RMAN> report schema;
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+1    790      SYSTEM               YES     /u01/app/oracle/oradata/PROD1/system01.dbf
+3    740      SYSAUX               NO      /u01/app/oracle/oradata/PROD1/sysaux01.dbf
+4    155      UNDOTBS1             YES     /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+5    5        DATA_TBS             NO      /u01/app/oracle/oradata/PROD1/data01.dbf
+6    5        USERS                NO      /u01/app/oracle/oradata/PROD1/users01.dbf
+
+
+6번 (users01.dbf) 을 백업하자.
+RMAN> backup datafile 6;
+Starting Control File and SPFILE Autobackup at 01-JUL-20
+piece handle=/home/oracle/backup/rman/c-2264500624-20200701-05 comment=NONE
+Finished Control File and SPFILE Autobackup at 01-JUL-20
+
+
+백업파일을 사용자가 임의로 삭제하였다면
+[oracle@edydr1p1 rman]$ rm /home/oracle/backup/rman/c-2264500624-20200701-05
+
+RMAN> crosscheck backupset;
+using channel ORA_DISK_1
+crosschecked backup piece: found to be 'AVAILABLE'
+backup piece handle=/home/oracle/backup/rman/09v47gqv_1_1_20200701 RECID=4 STAMP=1044628319
+...
+crosschecked backup piece: found to be 'AVAILABLE'
+backup piece handle=/home/oracle/backup/rman/0mv47j6i_1_1_20200701 RECID=17 STAMP=1044630738
+crosschecked backup piece: found to be 'EXPIRED'
+backup piece handle=/home/oracle/backup/rman/c-2264500624-20200701-05 RECID=18 STAMP=1044630739
+Crosschecked 15 objects
+
+RMAN> list expired backupset;
+List of Backup Sets
+===================
+BS Key  Type LV Size       Device Type Elapsed Time Completion Time
+------- ---- -- ---------- ----------- ------------ ---------------
+11      Full    9.95M      DISK        00:00:00     01-JUL-20      
+        BP Key: 18   Status: EXPIRED  Compressed: NO  Tag: TAG20200701T151219
+        Piece Name: /home/oracle/backup/rman/c-2264500624-20200701-05
+  SPFILE Included: Modification time: 01-JUL-20
+  SPFILE db_unique_name: PROD1
+  Control File Included: Ckp SCN: 4341049      Ckp time: 01-JUL-20
+
+expired 된 백업을 지운다.
+RMAN> delete expired backupset;
+
+
+참고 ) 백업& 리커버리할때는 large pool 을 설정해서 사용하자.
+
+
+# RMAN 시나리오6. 백업들을 지워보자.
+
+RMAN> list backup;
+using target database control file instead of recovery catalog
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWS ===============
+RMAN-00571: ===========================================================
+
+오라클이 꺼져있으면 저명령어 칠때 에러나네, 켜고 실행하면 제대로 나온다.
+
+RMAN> list backupset;
+다음과 같이 지운다. 
+RMAN> delete backupset;
+
+
+# RMAN 시나리오7. advisor 호출
+
+RMAN> backup database;
+
+장애 발생
+[oracle@edydr1p1 ~]$ rm /u01/app/oracle/oradata/PROD1/system01.dbf
+
+SYS@PROD1>startup force
+ORACLE instance started.
+Database mounted.
+ORA-01157: cannot identify/lock data file 1 - see DBWR trace file
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+
+오라클을 재시작하면 RMAN 도 재접속해야하네..
+뭐가 문제인지 알아보자.
+RMAN> list failure;
+
+using target database control file instead of recovery catalog
+Database Role: PRIMARY
+
+List of Database Failures
+=========================
+
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+7742       CRITICAL OPEN      03-JUL-20     System datafile 1: '/u01/app/oracle/oradata/PROD1/system01.dbf' is missing
+7468       HIGH     OPEN      01-JUL-20     Tablespace 4: 'USERS' is offline
+
+알맨 조언좀 해줘~!!! ( 근데 실제로 해보니깐 두번정도 에러나다가 한참지나서 해보니 그제서야 됬다. 바로바로 안될수있나 보다 )
+RMAN> advise failure;
+
+Database Role: PRIMARY
+
+List of Database Failures
+=========================
+
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+7742       CRITICAL OPEN      03-JUL-20     System datafile 1: '/u01/app/oracle/oradata/PROD1/system01.dbf' is missing
+7468       HIGH     OPEN      01-JUL-20     Tablespace 4: 'USERS' is offline
+
+analyzing automatic repair options; this may take some time
+allocated channel: ORA_DISK_1
+channel ORA_DISK_1: SID=240 device type=DISK
+analyzing automatic repair options complete
+
+Not all specified failures can currently be repaired.
+The following failures must be repaired before advise for others can be given.
+
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+7742       CRITICAL OPEN      03-JUL-20     System datafile 1: '/u01/app/oracle/oradata/PROD1/system01.dbf' is missing
+
+Mandatory Manual Actions
+========================
+no manual actions available
+
+Optional Manual Actions
+=======================
+1. If file /u01/app/oracle/oradata/PROD1/system01.dbf was unintentionally renamed or moved, restore it
+
+Automated Repair Options
+========================
+Option Repair Description
+------ ------------------
+1      Restore and recover datafile 1  
+  Strategy: The repair includes complete media recovery with no data loss
+  Repair script: /u01/app/oracle/diag/rdbms/prod1/PROD1/hm/reco_293911116.hm
+
+복구 스크립트좀 보여줘~!!!
+RMAN> repair failure preview;
+
+Strategy: The repair includes complete media recovery with no data loss
+Repair script: /u01/app/oracle/diag/rdbms/prod1/PROD1/hm/reco_293911116.hm
+
+contents of repair script:
+   # restore and recover datafile
+   restore ( datafile 1 );
+   recover datafile 1;
+   sql 'alter database datafile 1 online';
+
+
+그럼 그렇게 복구해봐!!
+RMAN> repair failure;
+Strategy: The repair includes complete media recovery with no data loss
+Repair script: /u01/app/oracle/diag/rdbms/prod1/PROD1/hm/reco_293911116.hm
+
+contents of repair script:
+   # restore and recover datafile
+   restore ( datafile 1 );
+   recover datafile 1;
+   sql 'alter database datafile 1 online';
+
+Do you really want to execute the above repair (enter YES or NO)? yes
+executing repair script
+
+Starting restore at 03-JUL-20
+using channel ORA_DISK_1
+
+channel ORA_DISK_1: starting datafile backup set restore
+channel ORA_DISK_1: specifying datafile(s) to restore from backup set
+channel ORA_DISK_1: restoring datafile 00001 to /u01/app/oracle/oradata/PROD1/system01.dbf
+channel ORA_DISK_1: reading from backup piece /home/oracle/backup/rman/0ov4c9u2_1_1_20200703
+channel ORA_DISK_1: piece handle=/home/oracle/backup/rman/0ov4c9u2_1_1_20200703 tag=TAG20200703T100450
+channel ORA_DISK_1: restored backup piece 1
+channel ORA_DISK_1: restore complete, elapsed time: 00:00:15
+Finished restore at 03-JUL-20
+
+Starting recover at 03-JUL-20
+using channel ORA_DISK_1
+
+starting media recovery
+media recovery complete, elapsed time: 00:00:00
+
+Finished recover at 03-JUL-20
+
+sql statement: alter database datafile 1 online
+repair failure complete
+
+
+
+# RMAN 시나리오8. advisor2
+
+테이블 스페이스 만들자.
+SYS@PROD1>create tablespace insa datafile '$ORACLE_BASE/oradata/PROD1/insa.dbf' size 10M ;
+
+RMAN> report schema;
+using target database control file instead of recovery catalog
+Report of database schema for database with db_unique_name PROD1
+
+List of Permanent Datafiles
+===========================
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+1    790      SYSTEM               YES     /u01/app/oracle/oradata/PROD1/system01.dbf
+2    10       INSA                 NO      /u01/app/oracle/oradata/PROD1/insa.dbf
+3    740      SYSAUX               NO      /u01/app/oracle/oradata/PROD1/sysaux01.dbf
+4    155      UNDOTBS1             YES     /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+5    5        DATA_TBS             NO      /u01/app/oracle/oradata/PROD1/data01.dbf
+6    5        USERS                NO      /u01/app/oracle/oradata/PROD1/users01.dbf
+
+
+백업이 필요한건 뭐야?
+RMAN> report need backup;
+
+RMAN retention policy will be applied to the command
+RMAN retention policy is set to redundancy 1
+Report of files with less than 1 redundant backups
+File #bkps Name
+---- ----- -----------------------------------------------------
+2    0     /u01/app/oracle/oradata/PROD1/insa.dbf
+
+백업해
+RMAN> backup tablespace insa ;
+
+Starting backup at 03-JUL-20
+allocated channel: ORA_DISK_1
+channel ORA_DISK_1: SID=250 device type=DISK
+channel ORA_DISK_1: starting full datafile backup set
+channel ORA_DISK_1: specifying datafile(s) in backup set
+input datafile file number=00002 name=/u01/app/oracle/oradata/PROD1/insa.dbf
+channel ORA_DISK_1: starting piece 1 at 03-JUL-20
+channel ORA_DISK_1: finished piece 1 at 03-JUL-20
+piece handle=/home/oracle/backup/rman/0rv4ccad_1_1_20200703 tag=TAG20200703T104533 comment=NONE
+channel ORA_DISK_1: backup set complete, elapsed time: 00:00:01
+Finished backup at 03-JUL-20
+
+Starting Control File and SPFILE Autobackup at 03-JUL-20
+piece handle=/home/oracle/backup/rman/c-2264500624-20200703-02 comment=NONE
+Finished Control File and SPFILE Autobackup at 03-JUL-20
+
+테이블을 만들자.
+SYS@PROD1>create table scott.insa_table tablespace insa as select * from hr.employees;
+
+로그스위치
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+
+장애발생
+[oracle@edydr1p1 PROD1]$ rm insa.dbf 
+
+SYS@PROD1>startup force;
+ORACLE instance started.
+Total System Global Area 1241513984 bytes
+Fixed Size		    2923872 bytes
+Variable Size		  452985504 bytes
+Database Buffers	  771751936 bytes
+Redo Buffers		   13852672 bytes
+Database mounted.
+ORA-01157: cannot identify/lock data file 2 - see DBWR trace file
+ORA-01110: data file 2: '/u01/app/oracle/oradata/PROD1/insa.dbf'
+
+복구할게 뭐가있지?
+RMAN> list failure;
+
+RMAN> advise failure;
+RMAN> repair failure preview;
+RMAN> repair failure;
+
+
+# RMAN 시나리오10. ??
+
+SYS@PROD1>create table scott.r_tab as select * from hr.employees;
+
+아카이브 로그 확인
+SYS@PROD1>select sequence#,name from v$archived_log;
+ SEQUENCE# NAME
+---------- --------------------------------------------------
+	15 /home/oracle/arch1/arch_1_15_1043925304.arc
+	16 /home/oracle/arch1/arch_1_16_1043925304.arc
+
+RMAN 에서 아카이브로그 확인
+RMAN> list archivelog all;
+RMAN> crosscheck archivelog all;
+RMAN> list expired archivelog all;
+
+시잘데기 없는 아카이브 로그를 삭제한다.
+RMAN> delete expired archivelog all;
+
+아카이브 로그 백업
+RMAN> backup as compressed backupset archivelog all delete input tag='archivedlog backup';
+RMAN> list backup of archivelog all;
+
+사고발생
+[oracle@edydr1p1 rman]$  rm /u01/app/oracle/oradata/PROD1/users01.dbf
+
+SYS@PROD1>startup
+ORA-01157: cannot identify/lock data file 6 - see DBWR trace file
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+RMAN> list failure;
+Database Role: PRIMARY
+List of Database Failures
+=========================
+Failure ID Priority Status    Time Detected Summary
+---------- -------- --------- ------------- -------
+2          HIGH     OPEN      03-JUL-20     One or more non-system datafiles are missing
+
+RMAN> restore tablespace users;
+RMAN> recover tablespace users;
+
+SYS@PROD1>alter database open;
+Database altered.
+
+Elapsed: 00:00:00.62
+SYS@PROD1>select count(*)from scott.r_tab;
+  COUNT(*)
+----------
+       107
+
+
+# RMAN 시나리오11. 데이터파일 경로 변경
+
+SYS@PROD1>create tablespace insa01 datafile '/u01/app/oracle/oradata/PROD1/insa01.dbf' size 10M;
+
+SYS@PROD1>create table scott.all_obj tablespace insa01 as select * from all_objects where rownum<=500;
+
+백업이 필요한건 무엇인가?  방금 만든 테이블스페이스이겄제..
+RMAN> report need backup;
+RMAN retention policy will be applied to the command
+RMAN retention policy is set to redundancy 1
+Report of files with less than 1 redundant backups
+File #bkps Name
+---- ----- -----------------------------------------------------
+2    0     /u01/app/oracle/oradata/PROD1/insa01.dbf
+
+
+전체백업을 받아보자.
+RMAN> backup database;
+Starting backup at 03-JUL-20
+using channel ORA_DISK_1
+channel ORA_DISK_1: starting full datafile backup set
+channel ORA_DISK_1: specifying datafile(s) in backup set
+input datafile file number=00001 name=/u01/app/oracle/oradata/PROD1/system01.dbf
+input datafile file number=00003 name=/u01/app/oracle/oradata/PROD1/sysaux01.dbf
+input datafile file number=00004 name=/u01/app/oracle/oradata/PROD1/undotbs01.dbf
+input datafile file number=00002 name=/u01/app/oracle/oradata/PROD1/insa01.dbf
+input datafile file number=00005 name=/u01/app/oracle/oradata/PROD1/data01.dbf
+input datafile file number=00006 name=/u01/app/oracle/oradata/PROD1/users01.dbf
+channel ORA_DISK_1: starting piece 1 at 03-JUL-20
+channel ORA_DISK_1: finished piece 1 at 03-JUL-20
+piece handle=/home/oracle/backup/rman/11v4cgug_1_1_20200703 tag=TAG20200703T120432 comment=NONE
+channel ORA_DISK_1: backup set complete, elapsed time: 00:00:25
+Finished backup at 03-JUL-20
+
+Starting Control File and SPFILE Autobackup at 03-JUL-20
+piece handle=/home/oracle/backup/rman/c-2264500624-20200703-05 comment=NONE
+Finished Control File and SPFILE Autobackup at 03-JUL-20
+
+
+
+
+
+RMAN> list backup of tablespace insa01;
+List of Backup Sets
+===================
+BS Key  Type LV Size       Device Type Elapsed Time Completion Time
+------- ---- -- ---------- ----------- ------------ ---------------
+21      Full    1.22G      DISK        00:00:18     03-JUL-20      
+        BP Key: 28   Status: AVAILABLE  Compressed: NO  Tag: TAG20200703T120432
+        Piece Name: /home/oracle/backup/rman/11v4cgug_1_1_20200703
+  List of Datafiles in backup set 21
+  File LV Type Ckp SCN    Ckp Time  Name
+  ---- -- ---- ---------- --------- ----
+  2       Full 5185468    03-JUL-20 /u01/app/oracle/oradata/PROD1/insa01.dbf
+
+사고발생!! ( 디스크가 고장나서 사라졌다고 하자.. )
+[oracle@edydr1p1 PROD1]$ rm insa01.dbf 
+
+데이터베이스를 체크해봐!!
+RMAN> validate database;
+Starting validate at 03-JUL-20
+using channel ORA_DISK_1
+channel ORA_DISK_1: starting validation of datafile
+channel ORA_DISK_1: specifying datafile(s) for validation
+input datafile file number=00001 name=/u01/app/oracle/oradata/PROD1/system01.dbf
+input datafile file number=00003 name=/u01/app/oracle/oradata/PROD1/sysaux01.dbf
+input datafile file number=00004 name=/u01/app/oracle/oradata/PROD1/undotbs01.dbf
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWS ===============
+RMAN-00571: ===========================================================
+RMAN-03009: failure of validate command on ORA_DISK_1 channel at 07/03/2020 12:08:29
+ORA-01122: database file 2 failed verification check
+ORA-01110: data file 2: '/u01/app/oracle/oradata/PROD1/insa01.dbf'
+ORA-01565: error in identifying file '/u01/app/oracle/oradata/PROD1/insa01.dbf'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+RMAN> run {
+2> alter tablespace insa01 offline immediate;
+3> set newname for datafile 2 to '/home/oracle/insa01.dbf';
+4> restore tablespace insa01;
+5> switch datafile 2;
+6> recover tablespace insa01;
+7> alter tablespace insa01 online;
+8> }
+
+RMAN> report schema;
+Report of database schema for database with db_unique_name PROD1
+List of Permanent Datafiles
+===========================
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+1    790      SYSTEM               YES     /u01/app/oracle/oradata/PROD1/system01.dbf
+2    10       INSA01               NO      /home/oracle/insa01.dbf
+3    740      SYSAUX               NO      /u01/app/oracle/oradata/PROD1/sysaux01.dbf
+4    155      UNDOTBS1             YES     /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+5    5        DATA_TBS             NO      /u01/app/oracle/oradata/PROD1/data01.dbf
+6    5        USERS                NO      /u01/app/oracle/oradata/PROD1/users01.dbf
+
+
+# RMAN 시나리오12. 컨트롤 파일 복구
+
+RMAN> show all;
+RMAN configuration parameters for database with db_unique_name PROD1 are:
+CONFIGURE RETENTION POLICY TO REDUNDANCY 1; # default
+CONFIGURE BACKUP OPTIMIZATION OFF; # default
+CONFIGURE DEFAULT DEVICE TYPE TO DISK;
+CONFIGURE CONTROLFILE AUTOBACKUP ON;
+CONFIGURE CONTROLFILE AUTOBACKUP FORMAT FOR DEVICE TYPE DISK TO '/home/oracle/backup/rman/%F';
+CONFIGURE DEVICE TYPE DISK PARALLELISM 1 BACKUP TYPE TO BACKUPSET; # default
+CONFIGURE RMAN OUTPUT TO KEEP FOR 7 DAYS; # default
+
+컨트롤파일은 용량이 적으니 자동백업하는게 좋다.
+
+
+컨트롤파일 자동저장위치를 default 로 변경해보자.
+RMAN> configure controlfile autobackup format for device type disk clear;
+
+RMAN> show all;
+CONFIGURE CONTROLFILE AUTOBACKUP FORMAT FOR DEVICE TYPE DISK TO '%F'; # default
+
+retension 정책에 맞지 않는 백업확인
+RMAN> report obsolete;
+RMAN retention policy will be applied to the command
+RMAN retention policy is set to redundancy 1
+Report of obsolete backups and copies
+Type                 Key    Completion Time    Filename/Handle
+-------------------- ------ ------------------ --------------------
+Backup Set           12     03-JUL-20         
+  Backup Piece       19     03-JUL-20          /home/oracle/backup/rman/0ov4c9u2_1_1_20200703
+Backup Set           13     03-JUL-20         
+  Backup Piece       20     03-JUL-20          /home/oracle/backup/rman/c-2264500624-20200703-00
+Backup Set           14     03-JUL-20         
+  Backup Piece       21     03-JUL-20          /home/oracle/backup/rman/c-2264500624-20200703-01
+Backup Set           15     03-JUL-20         
+  Backup Piece       22     03-JUL-20          /home/oracle/backup/rman/0rv4ccad_1_1_20200703
+Backup Set           16     03-JUL-20         
+  Backup Piece       23     03-JUL-20          /home/oracle/backup/rman/c-2264500624-20200703-02
+Backup Set           17     03-JUL-20         
+  Backup Piece       24     03-JUL-20          /home/oracle/backup/rman/c-2264500624-20200703-03
+Backup Set           18     03-JUL-20         
+  Backup Piece       25     03-JUL-20          /home/oracle/backup/rman/0uv4cfoh_1_1_20200703
+Backup Set           19     03-JUL-20         
+  Backup Piece       26     03-JUL-20          /home/oracle/backup/rman/0vv4cfok_1_1_20200703
+Archive Log          46     03-JUL-20          /home/oracle/arch1/arch_1_22_1044014017.arc
+Backup Set           20     03-JUL-20         
+  Backup Piece       27     03-JUL-20          /home/oracle/backup/rman/c-2264500624-20200703-04
+Archive Log          45     03-JUL-20          /home/oracle/arch1/arch_1_27_1044014017.arc
+Archive Log          47     03-JUL-20          /home/oracle/arch1/arch_1_26_1044014017.arc
+Archive Log          51     03-JUL-20          /home/oracle/arch1/arch_1_25_1044014017.arc
+Archive Log          50     03-JUL-20          /home/oracle/arch1/arch_1_23_1044014017.arc
+Archive Log          49     03-JUL-20          /home/oracle/arch1/arch_1_21_1044014017.arc
+Archive Log          48     03-JUL-20          /home/oracle/arch1/arch_1_24_1044014017.arc
+Archive Log          52     03-JUL-20          /home/oracle/arch1/arch_1_28_1044014017.arc
+Archive Log          53     03-JUL-20          /home/oracle/arch1/arch_1_29_1044014017.arc
+Archive Log          54     03-JUL-20          /home/oracle/arch1/arch_1_30_1044014017.arc
+Archive Log          55     03-JUL-20          /home/oracle/arch1/arch_1_31_1044014017.arc
+Backup Set           22     03-JUL-20         
+  Backup Piece       29     03-JUL-20          /home/oracle/backup/rman/c-2264500624-20200703-05
+
+retension 정책에 맞지 않는것 삭제
+RMAN> delete obsolete;
+
+컨트롤 파일을 백업한다.
+RMAN> backup current controlfile;
+
+디비전체 백업 & 컨트롤 파일 auto backup
+RMAN> backup as compressed backupset database;
+
+RMAN> list backup;
+...
+BS Key  Type LV Size       Device Type Elapsed Time Completion Time
+------- ---- -- ---------- ----------- ------------ ---------------
+26      Full    324.05M    DISK        00:00:36     03-JUL-20      
+        BP Key: 33   Status: AVAILABLE  Compressed: YES  Tag: TAG20200703T140717
+        Piece Name: /home/oracle/backup/rman/17v4co4l_1_1_20200703
+  List of Datafiles in backup set 26
+  File LV Type Ckp SCN    Ckp Time  Name
+  ---- -- ---- ---------- --------- ----
+  1       Full 5192741    03-JUL-20 /u01/app/oracle/oradata/PROD1/system01.dbf
+  3       Full 5192741    03-JUL-20 /u01/app/oracle/oradata/PROD1/sysaux01.dbf
+  4       Full 5192741    03-JUL-20 /u01/app/oracle/oradata/PROD1/undotbs01.dbf
+  5       Full 5192741    03-JUL-20 /u01/app/oracle/oradata/PROD1/data01.dbf
+  6       Full 5192741    03-JUL-20 /u01/app/oracle/oradata/PROD1/users01.dbf
+
+BS Key  Type LV Size       Device Type Elapsed Time Completion Time
+------- ---- -- ---------- ----------- ------------ ---------------
+27      Full    10.05M     DISK        00:00:00     03-JUL-20      
+        BP Key: 34   Status: AVAILABLE  Compressed: NO  Tag: TAG20200703T140802
+        Piece Name: /home/oracle/fast_recovery_area/PROD1/autobackup/2020_07_03/o1_mf_s_1044799682_hhxh9lt9_.bkp
+  SPFILE Included: Modification time: 03-JUL-20
+  SPFILE db_unique_name: PROD1
+  Control File Included: Ckp SCN: 5192786      Ckp time: 03-JUL-20
+
+컨트롤 파일위치 확인
+SYS@PROD1>select name from v$controlfile;
+NAME
+--------------------------------------------------
+/u01/app/oracle/oradata/PROD1/control01.ctl
+
+테이블 만들고
+SYS@PROD1>create table hr.t1 (id number);
+SYS@PROD1>insert into hr.t1 values (1);
+SYS@PROD1>commit;
+
+장애발생!!
+[oracle@edydr1p1 rman]$ rm /u01/app/oracle/oradata/PROD1/control01.ctl
+
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+SYS@PROD1>startup
+ORA-00205: error in identifying control file, check alert log for more info
+
+alert log 를 보면 컨트롤 파일이 없다고 나온다.
+[oracle@edydr1p1 trace]$ tail -f alert_PROD1.log 
+ORA-00210: cannot open the specified control file
+ORA-00202: control file: '/u01/app/oracle/oradata/PROD1/control01.ctl'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 3
+
+오토백업으로부터 컨트롤 파일을 가져온다.
+RMAN> restore controlfile from autobackup;
+
+데이터 베이스 오픈하자.. 근데 에러나네
+RMAN> alter database open;
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWS ===============
+RMAN-00571: ===========================================================
+RMAN-03002: failure of sql statement command at 07/03/2020 14:17:57
+ORA-01507: database not mounted
+
+그라믄 마운트 부터 하자.
+RMAN> alter database mount;
+다시 오픈하자.
+RMAN> alter database open;
+
+RMAN-03002: failure of sql statement command at 07/03/2020 14:18:15
+ORA-01589: must use RESETLOGS or NORESETLOGS option for database open
+
+리셋로그하고 오픈하자.
+RMAN> alter database open resetlogs;
+RMAN-03002: failure of sql statement command at 07/03/2020 14:18:39
+ORA-01194: file 1 needs more recovery to be consistent
+ORA-01110: data file 1: '/u01/app/oracle/oradata/PROD1/system01.dbf'
+
+디비를 복구하자.
+RMAN> recover database;
+starting media recovery
+archived log for thread 1 with sequence 32 is already on disk as file /u01/app/oracle/oradata/PROD1/redo02.log
+archived log file name=/u01/app/oracle/oradata/PROD1/redo02.log thread=1 sequence=32
+media recovery complete, elapsed time: 00:00:00
+Finished recover at 03-JUL-20
+
+다시 리셋로그하고 오픈
+RMAN> alter database open resetlogs;
+
+resetlogs 로 오픈한 이력확인
+RMAN> list incarnation of database;
+List of Database Incarnations
+DB Key  Inc Key DB Name  DB ID            STATUS  Reset SCN  Reset Time
+------- ------- -------- ---------------- --- ---------- ----------
+1       1       PROD1    2264500624       PARENT  2752531    24-JUN-20
+2       2       PROD1    2264500624       PARENT  3470365    24-JUN-20
+3       3       PROD1    2264500624       PARENT  3679535    25-JUN-20
+4       4       PROD1    2264500624       PARENT  3783654    25-JUN-20
+5       5       PROD1    2264500624       CURRENT 5193141    03-JUL-20
+
+백업파일 정리
+RMAN> report obsolete;
+RMAN> delete obsolete;
+
+
+# RMAN 시나리오13. control 파일 직접지정해서 복구
+controlfile auto backup 사용하지 않는 상황, FRA사용하지 않는 상황에서 control file 손실 및 복구
+
+RMAN> delete backupset;
+
+백업 옵션 변경 -- 컨트롤 파일 자동백업 끄기
+RMAN> configure controlfile autobackup off;
+
+백업하자.
+RMAN> backup as compressed backupset format '/home/oracle/backup/rman/%U_%T' database include current controlfile;
+
+데이터좀 집어넣자.
+SYS@PROD1>insert into hr.t1 values (2);
+SYS@PROD1>commit;
+SYS@PROD1>select count(*) from hr.t1;
+  COUNT(*)
+----------
+	 2
+
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+
+사고발생!!
+[oracle@edydr1p1 PROD1]$ rm control01.ctl
+
+SYS@PROD1>startup
+컨트롤 파일이 없음을 알아챈다. 다시 끈다.
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+
+이부분이 좀 까다로운 부분이다…
+RMAN 에서 NOMOUNT 로 가서 작업을 진행해야한다.
+
+[oracle@edydr1p1 ~]$ rman target /
+RMAN> startup nomount;
+
+RMAN> list backup;
+using target database control file instead of recovery catalog
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWS ===============
+RMAN-00571: ===========================================================
+RMAN-03002: failure of list command at 07/03/2020 14:47:44
+ORA-01507: database not mounted
+
+RMAN> restore controlfile;
+Starting restore at 03-JUL-20
+allocated channel: ORA_DISK_1
+channel ORA_DISK_1: SID=237 device type=DISK
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWS ===============
+RMAN-00571: ===========================================================
+RMAN-03002: failure of restore command at 07/03/2020 14:49:12
+RMAN-06563: control file or SPFILE must be restored using FROM AUTOBACKUP
+
+컨트롤 파일 백업파일을 직접 지정한다.
+RMAN> restore controlfile from '/home/oracle/backup/rman/1cv4cpq5_1_1_20200703';
+Starting restore at 03-JUL-20
+using channel ORA_DISK_1
+channel ORA_DISK_1: restoring control file
+channel ORA_DISK_1: restore complete, elapsed time: 00:00:01
+output file name=/u01/app/oracle/oradata/PROD1/control01.ctl
+Finished restore at 03-JUL-20
+RMAN> alter database mount;
+RMAN> recover database;
+RMAN> alter database open resetlogs;
+
+resetlogs 로 오픈시에는 반드시 백업해야한다.
+RMAN> backup as compressed backupset database;
+
+필요없는것들은 지우자.
+RMAN> report obsolete;
+RMAN> delete obsolete;
+
+
+참고 ) 백업할때 리두로그가 UNUSED 인게 없도록 한후 백업받는게 좋다.
+
+# RMAN 시나리오14. 불완전 복구 ( 아카이브 손실 )
+
+테이블 하나 만들자.
+SYS@PROD1>create table scott.emp_arch as select * from hr.employees;
+
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+SYS@PROD1>alter system switch logfile;
+
+테이블 한개 더 만들자.
+SYS@PROD1>create table scott.dept_arch as select * from hr.departments;
+
+아카이브 파일을 확인하고 마지막 아카이브 파일을 삭제한다.
+[oracle@edydr1p1 ~]$ ll arch1/
+total 4284
+-rw-r----- 1 oracle oinstall    1024 Jul  3 15:17 arch_1_6_1044802402.arc
+-rw-r----- 1 oracle oinstall    3072 Jul  3 15:17 arch_1_7_1044802402.arc
+-rw-r----- 1 oracle oinstall   39936 Jul  3 15:18 arch_1_8_1044802402.arc
+-rw-r----- 1 oracle oinstall    1024 Jul  3 15:18 arch_1_9_1044802402.arc
+
+[oracle@edydr1p1 arch1]$ rm arch_1_9_1044802402.arc
+
+데이터 파일도 삭제한다.
+[oracle@edydr1p1 PROD1]$ rm users01.dbf
+
+껐다 켠다.
+SYS@PROD1>shutdown immediate;
+SYS@PROD1>startup
+Database mounted.
+ORA-01157: cannot identify/lock data file 6 - see DBWR trace file
+ORA-01110: data file 6: '/u01/app/oracle/oradata/PROD1/users01.dbf'
+
+알맨에게 도움을 요청한다.
+[oracle@edydr1p1 ~]$ rman target /
+
+일단 users 테이블스페이스를 백업으로 부터 가져온다
+RMAN> restore tablespace users;
+
+
+리커버하자. 하지만 아카이브가 없으니 제대로 복구될리 없다.
+RMAN> recover tablespace users;
+Starting recover at 03-JUL-20
+using channel ORA_DISK_1
+
+starting media recovery
+
+archived log for thread 1 with sequence 1 is already on disk as file /home/oracle/arch1/arch_1_1_1044802402.arc
+archived log for thread 1 with sequence 2 is already on disk as file /home/oracle/arch1/arch_1_2_1044802402.arc
+archived log for thread 1 with sequence 3 is already on disk as file /home/oracle/arch1/arch_1_3_1044802402.arc
+archived log for thread 1 with sequence 4 is already on disk as file /home/oracle/arch1/arch_1_4_1044802402.arc
+archived log for thread 1 with sequence 5 is already on disk as file /home/oracle/arch1/arch_1_5_1044802402.arc
+archived log for thread 1 with sequence 6 is already on disk as file /home/oracle/arch1/arch_1_6_1044802402.arc
+archived log for thread 1 with sequence 7 is already on disk as file /home/oracle/arch1/arch_1_7_1044802402.arc
+archived log for thread 1 with sequence 8 is already on disk as file /home/oracle/arch1/arch_1_8_1044802402.arc
+archived log for thread 1 with sequence 10 is already on disk as file /home/oracle/arch1/arch_1_10_1044802402.arc
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWS ===============
+RMAN-00571: ===========================================================
+RMAN-03002: failure of recover command at 07/03/2020 15:23:39
+RMAN-06053: unable to perform media recovery because of missing log
+RMAN-06025: no backup of archived log for thread 1 with sequence 9 and starting SCN of 5200358 found to restore
+
+아카이브손실로 5200358 번 SCN 까지 복구할수있단다.
+RMAN> recover database until scn 5200358;
+Starting recover at 03-JUL-20
+using channel ORA_DISK_1
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWㄱS ===============
+RMAN-00571: ===========================================================
+RMAN-03002: failure of recover command at 07/03/2020 15:32:54
+RMAN-06556: datafile 1 must be restored from backup older than SCN 5200358
+헉.. 근데 안되네.. 우짜지…
+
+SYS@PROD1>select sequence#, first_change#, name from v$archived_log;
+	 1	 5196862 /home/oracle/arch1/arch_1_1_1044802402.arc
+	 2	 5199638 /home/oracle/arch1/arch_1_2_1044802402.arc
+	 3	 5199641 /home/oracle/arch1/arch_1_3_1044802402.arc
+	 4	 5199645 /home/oracle/arch1/arch_1_4_1044802402.arc
+	 5	 5199648 /home/oracle/arch1/arch_1_5_1044802402.arc
+	 6	 5200283 /home/oracle/arch1/arch_1_6_1044802402.arc
+	 7	 5200286 /home/oracle/arch1/arch_1_7_1044802402.arc
+	 8	 5200290 /home/oracle/arch1/arch_1_8_1044802402.arc
+	 9	 5200358 /home/oracle/arch1/arch_1_9_1044802402.arc
+	10	 5200361 /home/oracle/arch1/arch_1_10_1044802402.arc
+
+.. 미션 실패..
+
+
+# 서버가 켜지지 않은 상태인데 초기화 파라미터가 삭제되었다면 
+서버가 켜져있었다면 create pfile from memory 하면되는데..
+
+방법
+$ORACLE_BASE/dbs/init.ora  와 alert.log 파일을 조합해서 init 파일을 생성한다.
+alert_log 의 내용을 그대로 복사해서 init 파일을 만든다.
+
+  processes                = 200
+  resource_limit           = TRUE
+  sga_max_size             = 512M
+  large_pool_size          = 20M
+  streams_pool_size        = 8M
+  sga_target               = 512M
+  control_files            = "/u01/app/oracle/oradata/PROD1/control01.ctl"
+  db_block_size            = 8192
+  db_16k_cache_size        = 16M
+  compatible               = "12.1.0.2.0"
+...
+
+
+alert_log 가 없다면… RMAN 을 사용하는 방법
+
+
+
+
+# RMAN 15. spfile 복구
+
+RMAN> configure controlfile autobackup on;
+RMAN> backup database;
+
+사고발생!!
+[oracle@edydr1p1 dbs]$ rm spfilePROD1.ora iniPROD1.ora
+
+RMAN> startup force nomount
+startup failed: ORA-01078: failure in processing system parameters
+LRM-00109: could not open parameter file '/u01/app/oracle/product/12.1.0/dbhome_1/dbs/initPROD1.ora'
+starting Oracle instance without parameter file for retrieval of spfile
+Oracle instance started
+
+이제 DB ID 값을 알아야되는데 다음과 같이 하면 파악할수있다.
+trace 디렉토리에가보면 로그디렉토리에 db id 값이 남아있는것을 볼수잇다.
+[oracle@edydr1p1 trace]$ grep "Db ID=" *
+PROD1_pr00_8039.trc:	PDB ID=0, PDB Db ID=0=0x0
+PROD1_pr00_8039.trc:	Db ID=2264500624=0x86f98990, Db Name='PROD1'
+
+RMAN> set dbid  2264500624
+executing command: SET DBID
+
+RMAN> restore spfile from autobackup
+.. 실패 ..
+RMAN-00571: ===========================================================
+RMAN-00569: =============== ERROR MESSAGE STACK FOLLOWS ===============
+RMAN-00571: ===========================================================
+RMAN-03002: failure of restore command at 07/06/2020 10:55:06
+RMAN-06172: no AUTOBACKUP found or specified handle is not a valid copy or piece
+
+
+RMAN> run {
+2> set dbid 2264500624
+3> restore spfile from autobackup
+4> recovery area='/home/oracle/fast_recovery_area'
+5> db_name='PROD1';
+6> }
+
+executing command: SET DBID
+
+Starting restore at 06-JUL-20
+using channel ORA_DISK_1
+
+recovery area destination: /home/oracle/fast_recovery_area
+database name (or database unique name) used for search: PROD1
+channel ORA_DISK_1: AUTOBACKUP /home/oracle/fast_recovery_area/PROD1/autobackup/2020_07_06/o1_mf_s_1045046782_hj50mg9y_.bkp found in the recovery area
+channel ORA_DISK_1: looking for AUTOBACKUP on day: 20200706
+channel ORA_DISK_1: restoring spfile from AUTOBACKUP /home/oracle/fast_recovery_area/PROD1/autobackup/2020_07_06/o1_mf_s_1045046782_hj50mg9y_.bkp
+channel ORA_DISK_1: SPFILE restore from AUTOBACKUP complete
+Finished restore at 06-JUL-20
+
+이때 spfilePROD1.ora 파일이 생성되었다. 껐다 켜자.
+
+SYS@PROD1>shutdown abort;
+ORACLE instance shut down.
+SYS@PROD1>startup
+SYS@PROD1>select con_dbid from v$database;
+  CON_DBID
+----------
+2264500624
+
+
+
+#RMAN 16. Flashback 
+
+사용자의 논리적인 실수를 만회하기위한 방법이다.
+
+SYS@PROD1>create table hr.emp_30 as select * from hr.employees where department_id=30;
+
+SYS@PROD1>select current_scn, scn_to_timestamp(current_scn) from v$database;
+CURRENT_SCN SCN_TO_TIMESTAMP(CURRENT_SCN)
+----------- 
+    5819568 06-JUL-20 11.55.37.000000000 AM
+
+SYS@PROD1>update hr.emp_30 set salary=3000 where employee_id=114;
+SYS@PROD1>commit;
+
+SYS@PROD1>select current_scn, scn_to_timestamp(current_scn) from v$database;
+    5819618 06-JUL-20 11.56.39.000000000 AM
+
+업데이트 치기전의 값을 조회해보고싶다면
+SYS@PROD1>select employee_id, salary from hr.emp_30 
+as of timestamp to_timestamp('2020-07-06 11:55:37', 'yyyy-mm-dd hh24:mi:ss') 
+where employee_id=114;
+EMPLOYEE_ID	SALARY
+----------- ----------
+	114	 11000
+
+create 하기전 시점으로 조회한다면  에러가난다.
+SYS@PROD1>select employee_id, salary from hr.emp_30 
+as of timestamp(systimestamp - interval '30' minute) 
+where employee_id=114;
+ORA-01466: unable to read data - table definition has changed
+
+
+< Flashback versions Query >
+ VERSIONS 절을 사용하여
+ 과거 두 개의 지점의 Point-in-time 또는
+ 두 개의 지점의 SCN 사이에 존재하는 행의 모든 버전 확인
+
+VERSIONS PSEUDO-COLUMNS :
+ VERSIONS_STARTTIME (start timestamp of version)
+ VERSIONS_STARTSCN (start SCN of version)
+ VERSIONS_ENDTIME (end timestamp of version)
+ VERSIONS_ENDSCN (end SCN of version)
+ VERSIONS_XID (transaction ID of version)
+ VERSIONS_OPERATION (DML operation of version)
+
+
+SYS@PROD1>select current_scn, scn_to_timestamp(current_scn) from v$database;
+    5820556 06-JUL-20 12.09.05.000000000 PM
+
+
+
+SYS@PROD1>create table scott.emp_20 as select employee_id,last_name,salary from hr.employees where department_id=20;
+
+SYS@PROD1>update scott.emp_20 set salary=salary*1.3 where employee_id=201;
+SYS@PROD1>delete scott.emp_20 where employee_id=202;
+SYS@PROD1>commit;
+
+SYS@PROD1>select current_scn, scn_to_timestamp(current_scn) from v$database;
+    5824215 06-JUL-20 01.10.14.000000000 PM
+
+SYS@PROD1>select versions_xid , employee_id, last_name,salary from scott.emp_20 versions between scn minvalue and maxvalue;
+VERSIONS_XID	 EMPLOYEE_ID LAST_NAME			   SALARY
+---------------- ----------- ------------------------- ----------
+0A001D0075050000	 202 Fay			     6600
+0A001D0075050000	 201 Hartstein			    18590
+			 201 Hartstein			    14300
+			 202 Fay			     6600
+
+SYS@PROD1>select versions_xid , employee_id, last_name,salary from scott.emp_20 versions between timestamp systimestamp - interval '10' minute and systimestamp;
+VERSIONS_XID	 EMPLOYEE_ID LAST_NAME			   SALARY
+---------------- ----------- ------------------------- ----------
+0A001D0075050000	 202 Fay			     6600
+0A001D0075050000	 201 Hartstein			    18590
+			 201 Hartstein			    14300
+			 202 Fay			     6600
+
+
+< Flashbackup Transction Query >
+수행되었던 Transaction의 Operation 검색
+FLASHBACK_TRANSACTION_QUERY 테이블 검색 [SELECT ANY TRANSACTION 권한 필요]
+
+HR@PROD1>create table emp_60 as select employee_id,last_name, salary from employees where department_id=60;
+
+HR@PROD1>create table emp_90 as select employee_id,last_name, salary from employees where department_id=90;
+
+SYS@PROD1>select current_scn, scn_to_timestamp(current_scn) from v$database;
+    5824988 06-JUL-20 01.21.03.000000000 PM
+{ 트랜잭션1 }
+HR@PROD1>update emp_60 set salary=salary*1.1 where employee_id=107;
+HR@PROD1>delete emp_60 where employee_id=103;
+HR@PROD1>update emp_90 set salary=24 where employee_id=100;
+HR@PROD1>commit;
+
+{ 트랜잭션2 }
+HR@PROD1>update emp_60 set last_name='ENKIM' where employee_id=106;
+HR@PROD1>commit;
+
+SYS@PROD1>select current_scn, scn_to_timestamp(current_scn) from v$database;
+    5825174 06-JUL-20 01.24.51.000000000 PM
+
+-- versions 쿼리
+SYS@PROD1>select versions_xid , employee_id, last_name,salary 
+from emp_60  versions between scn 5824988   and 5825174 ;
+VERSIONS_XID	 EMPLOYEE_ID LAST_NAME			   SALARY
+---------------- ----------- ------------------------- ----------
+0100140030060000	 106 ENKIM			     4800
+0A00140075050000	 103 Hunold			     9000
+0A00140075050000	 107 Lorentz			     4620
+			 103 Hunold			     9000
+			 104 Ernst			     6000
+			 105 Austin			     4800
+			 106 Pataballa			     4800
+			 107 Lorentz			     4200
+
+8 rows selected.
+
+
+-- 트랜잭션 쿼리
+HR@PROD1>select table_name, operation from flashback_transaction_query where xid='0100140030060000';
+select table_name, operation from flashback_transaction_query where xid='0100140030060000'
+                                  *
+ERROR at line 1:
+ORA-01031: insufficient privileges
+권한이 없다는 에러가 뜬다. 권한을 부여하자.
+SYS@PROD1>grant select any transaction to hr;
+Grant succeeded.
+
+HR@PROD1>select table_name, operation from flashback_transaction_query where xid='0A00140075050000';
+TABLE_NAME		       OPERATION
+------------------------------ ------------------------------
+EMP_90			       UPDATE
+EMP_60			       DELETE
+EMP_60			       UPDATE
+			       BEGIN
+
+
+HR@PROD1>select table_name, operation, undo_sql from flashback_transaction_query where xid='0A00140075050000';
+
+TABLE_NAME OPERATION  UNDO_SQL
+---------- ---------- --------------------------------------------------
+EMP_90	   UPDATE     update "HR"."EMP_90" set "SALARY" = '24000' where
+		      ROWID = 'AAAW35AAGAAAAJrAAA';
+
+EMP_60	   DELETE     insert into "HR"."EMP_60"("EMPLOYEE_ID","LAST_NAME
+		      ","SALARY") values ('103','Hunold','9000');
+
+EMP_60	   UPDATE     update "HR"."EMP_60" set "SALARY" = '4200' where R
+		      OWID = 'AAAW34AAGAAAAJjAAE';
+
+	   BEGIN
+
+
+
+
+#RMAN 17. Flashback Table  ( 특정시간으로 복구 )
+
+
+SYS@PROD1>alter table scott.emp_flash enable row movement; 
+SYS@PROD1>flashback table scott.emp_flash 2 to timestamp to_timestamp('2020.07/06 06:33:39','yyyy/mm/dd hh24:mi:ss');
+
+
+#RMAN 18. Flashback Table ( 휴지통에서 복구 )
+
+flashback table 명령을 사용하면 point in time recovery를 사용하지 않고 drop table을 복원하는 기능 !!
+
+drop table 을 하면 recyclebin 으로 들어가는데 flashback  명령어로 복구시킬수있다.
+HR@PROD1>flashback table temp_emp to before drop;
+
+하지만 PK 같은건 복구가 안되므로 따로 찾아서 복구를 해줘야한다.
+HR@PROD1>select constraint_name, constraint_type , search_condition from user_constraints where table_name='TEMP_EMP';
+
+CONSTRAINT_NAME 				   C SEARCH_CONDITION
+-------------------------------------------------- - ------------------------------
+BIN$qb/pW6x9GwXgU284qMAVJw==$0			   C "JOB_ID" IS NOT NULL
+BIN$qb/pW6x8GwXgU284qMAVJw==$0			   C "HIRE_DATE" IS NOT NULL
+BIN$qb/pW6x7GwXgU284qMAVJw==$0			   C "EMAIL" IS NOT NULL
+BIN$qb/pW6x6GwXgU284qMAVJw==$0			   C "LAST_NAME" IS NOT NULL
+BIN$qb/pW6x5GwXgU284qMAVJw==$0			   P
+
+HR@PROD1>alter table temp_emp rename constraint "BIN$qb/pW6x5GwXgU284qMAVJw==$0" to temp_emp_id_pk;
+
+
+
+

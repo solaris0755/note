@@ -1,0 +1,187 @@
+1. Linux+Oracle 설치
+
+OS (오라클 리눅스) 설치 + ( 오라클11gR2 , 오라클12c ) 설치 직접해보기
+
+OS+Database Matrix ( 궁합보기 )
+https://oracle-base.com/articles/linux/articles-linux
+버전별 설치문서가 있음
+
+다운로드센터
+https://edelivery.oracle.com/osdc/faces/Home.jspx
+설치에 필요한 버전별 파일을 다운로드 받을수있다.
+용량이 크기 때문에 잘보고 받아야한다. 받고 나서 안되면 곤란하니까
+
+주요과정
+리눅스설치
+오라클설치전 환경설정
+오라클설치
+오라클설정 : dbca, netca, 부팅시 자동실행 설정
+
+
+2. database 수동설치/삭제
+
+# thunder 데이터베이스 생성하기
+
+데이터베이스 디렉토리 생성
+[oracle@host01]$ mkdir -p /u01/app/oracle/oradata/thunder
+
+패스워드 파일 생성
+[oracle@host01]$ cd $ORACLE_HOME/dbs
+[oracle@host01]$ orapwd file=orapwthunder password=oracle_4U
+
+pfile 생성
+[oracle@host01 dbs]$ vi initthunder.ora
+db_name=thunder
+service_names=thunder
+control_files='/u01/app/oracle/oradata/thunder/control01.ctl','/u01/app/oracle/oradata/thunder/control02.ctl'
+sga_target=400M
+pga_aggregate_target=150M
+db_block_size=8192
+remote_login_passwordfile='EXCLUSIVE'
+undo_tablespace='UNDOTBS1'
+
+
+.oraenv
+[oracle@host01 dbs]$ . oraenv
+ORACLE_SID = [PROD] ? thunder
+ORACLE_HOME = [/home/oracle] ? /u01/app/oracle/product/11.2.0.3/dbhome
+
+[oracle@host01 dbs]$ sqlplus / as sysdba
+SQL> create spfile from pfile;
+SQL> startup nomount;
+SQL> CREATE DATABASE thunder
+USER SYS IDENTIFIED BY oracle_4U
+USER SYSTEM IDENTIFIED BY oracle_4U
+LOGFILE GROUP 1 ('/u01/app/oracle/oradata/thunder/redo01a.log'
+ ,'/u01/app/oracle/oradata/thunder/redo01b.log') SIZE 100M,
+ GROUP 2 ('/u01/app/oracle/oradata/thunder/redo02a.log'
+ ,'/u01/app/oracle/oradata/thunder/redo02b.log') SIZE 100M
+CHARACTER SET AL32UTF8
+NATIONAL CHARACTER SET AL16UTF16
+EXTENT MANAGEMENT LOCAL
+DATAFILE '/u01/app/oracle/oradata/thunder/system01.dbf' SIZE 400M AUTOEXTEND ON
+SYSAUX
+DATAFILE '/u01/app/oracle/oradata/thunder/sysaux01.dbf' SIZE 200M AUTOEXTEND ON
+DEFAULT TABLESPACE USERS
+DATAFILE '/u01/app/oracle/oradata/thunder/users01.dbf' SIZE 50M AUTOEXTEND ON
+DEFAULT TEMPORARY TABLESPACE TEMP
+TEMPFILE '/u01/app/oracle/oradata/thunder/temp01.dbf' SIZE 100M AUTOEXTEND ON
+UNDO TABLESPACE UNDOTBS1
+DATAFILE '/u01/app/oracle/oradata/thunder/undotbs01.dbf' SIZE 200M AUTOEXTEND ON ;
+
+
+
+SQL> @?/rdbms/admin/catalog.sql
+SQL> @?/rdbms/admin/catproc.sql
+SQL> connect system/oracle_4U
+SQL> @?/sqlplus/admin/pupbld.sql
+SQL> exit
+
+# 오라클 자동실행 스크립트
+[root@host01 init.d]# vi /etc/oratab
+PROD:/u01/app/oracle/product/11.2.0.3/dbhome_1:Y
+
+
+[root@host01 init.d]# vi /etc/init.d/oracle
+#!/bin/bash
+#
+# chkconfig: - 70 30
+# description: oracle for GCLB
+#
+ORA_HOME="/u01/app/oracle/product/11.2.0.3/dbhome_1"
+ORA_OWNER="oracle"
+ 
+if [! -f $ORA_HOME/bin/dbstart -o ! -d $ORA_HOME]
+then
+        echo "Oracle Startup: failed"
+        exit 1
+fi
+ 
+case "$1" in
+start)
+        echo -n "Oracle Start: "
+        su - $ORA_OWNER -c "$ORA_HOME/bin/lsnrctl start"
+        su - $ORA_OWNER -c $ORA_HOME/bin/dbstart
+        touch /var/lock/subsys/oracle
+        echo "OK"
+        ;;
+stop)
+        echo -n "ORACLE Shutdown: "
+        su - $ORA_OWNER -c "$ORA_HOME/bin/lsnrctl stop"
+        su - $ORA_OWNER -c $ORA_HOME/bin/dbshut
+        rm -f /var/lock/subsys/oracle
+        echo "OK"
+        ;;
+restart)
+        $0 stop
+        $0 start
+        ;;
+*)
+        echo "Usage: $0 start|stop|restart"
+        exit 1
+esac
+exit 0
+
+
+[root@host01 init.d]# cd /etc/init.d
+[root@host01 init.d]# chmod 775 oracle
+[root@host01 init.d]# chkconfig --add oracle
+[root@host01 init.d]# chkconfig oracle on
+[root@host01 init.d]# chkconfig --list oracle
+oracle          0:off   1:off   2:on    3:on    4:on    5:on    6:off
+
+서버 재시작
+
+
+
+
+# thunder 데이터베이스 삭제
+SQL> shutdown immediate
+SQL> startup mount exclusive restrict
+SQL> drop database ;
+SQL> exit 
+
+
+
+
+
+3. LVM 을 사용하여 설치하기
+LVM : Logical Volume Manager
+OS버퍼를 거쳐서 사용하는게 느려서 디스크드라이브에 직접접근하겠다
+성능면에서 장점은 있지만 관리가 좀 어려울수있다.
+앞서배웠던 backup & recovery 가 파일시스템 기반이라 LVM 기반은 추가적으로 공부해야한다.
+12c 부터는 LVM 을 지원하지 않는다.
+
+(방식1)
+DB S/W : File System 에 설치
+DB : LVM 에 설치
+
+(방식2)
+DB S/W : LVM 에 설치
+DB : LVM 에 설치
+
+4. ASM 을 사용하여 설치하기
+Automatic Storage Management
+소프트웨어적으로 미러링 & 스트라이핑 
+블록단위로 미러링이된다. ( Allocation Unit )
+
+Grid 설치 + Oracle 설치
+Grid : Cluster(타사제품) + ASM(오라클제품)
+
+asm 시작명령 : srvctl start asm
+
+5. Upgrade
+11.2.0.3 -> 11.2.0.4 로 업그레이드
+Grid 업그레이드 (이때 asm 을 켜고 작업해야한다)
+Oracle 업그레이드
+DBUA 
+
+6. Patch
+
+
+7. 다른OS 에 설치해보기
+OracleLinux 말고 CentOS 같은걸로 11g 나 12c 를 설치해보자.
+
+
+
+

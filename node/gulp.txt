@@ -1,0 +1,115 @@
+# gulp 프로젝트 만들기
+
+https://www.youtube.com/watch?v=1rw9MfIleEg
+
+
+❯ mkdir gulp
+❯ cd gulp
+❯ ls
+❯ git init
+Initialized empty Git repository in /Users/hong/prj/gulp/.git/
+❯ code .
+zsh: command not found: code
+❯ npm init
+This utility will walk you through creating a package.json file.
+It only covers the most common items, and tries to guess sensible defaults.
+
+See `npm help init` for definitive documentation on these fields
+and exactly what they do.
+
+Use `npm install <pkg>` afterwards to install a package and
+save it as a dependency in the package.json file.
+
+Press ^C at any time to quit.
+package name: (gulp)
+version: (1.0.0)
+description: gup test
+entry point: (index.js)
+test command:
+git repository:
+keywords:
+author:
+license: (ISC)
+About to write to /Users/hong/prj/gulp/package.json:
+
+{
+  "name": "gulp",
+  "version": "1.0.0",
+  "description": "gup test",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC"
+}
+
+
+여기까지하면 package.json 파일이 생긴다.
+
+npm install --save-dev gulp
+
+이렇게 하면 node_modules 디렉토리가 생긴다.
+
+mkdir src
+mkdir dist
+gulpfile.js 파일을 생성한다.
+
+
+
+
+
+const gulp = require('gulp');
+// const imagemin = require('gulp-imagemin');
+const uglify = require('gulp-uglify');
+const concat = require('gulp-concat');
+const sass = require('gulp-sass');
+
+/*
+-- TOP LEVEL FUNCTIONS --
+gulp.task - define tasks
+gulp.src - point topfiles to use
+gupl.dest - point to folder to output
+gulp. watch - watch files and folders fo changes
+*/
+
+// logs message
+gulp.task('message', function(){
+    return console.log('Gulp is runnging');
+});
+
+gulp.task('copyhtml', async function (){
+   gulp.src('src/*.html')
+       .pipe(gulp.dest('dist'));
+});
+
+// npm install --save-dev gulp-imagemin
+gulp.task('imageMin', async function(){
+   gulp.src('src/images/*')
+       .pipe(imagemin())
+       .pipe(gulp.dest('dist/images'));
+});
+
+// npm install --save-dev gulp-uglify
+// gulp.task('uglify', async function(){
+//    gulp.src('src/js/*.js')
+//        .pipe(uglify())
+//        .pipe(gulp.dest('dist/js'));
+// });
+
+// npm install --save-dev gulp-sass
+gulp.task('sass', async function(){
+   gulp.src('src/sass/*.scss')
+       .pipe( sass().on('error', sass.logError))
+       .pipe(gulp.dest('dist/css'));
+});
+
+// npm install --save-dev gulp-concat
+gulp.task('concat', function(){
+    gulp.src('src/js/*.js')
+        .pipe(concat('main.js'))
+        .pipe(uglify())
+        .pipe(gulp.dest('dist/js'));
+});
+
+gulp.task('default', ['message','copyhtml','concat']);

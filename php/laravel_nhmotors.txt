@@ -113,8 +113,7 @@ npm install gulp-webserver gulp-concat gulp-uglify gulp-minify-html gulp-sass gu
 
 
 TODO : npm install laravel-elixir --save-dev 이것도 에러나고 뭔가 설치가 제대로 안된다.
-TODO : gulp 실행도 안된다.
-TODO : 이건 별도의  HelloWorld 프로젝트로 진행하자.
+
 
 gulp 강의 
 https://programmingsummaries.tistory.com/356
@@ -140,10 +139,41 @@ curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.0/install.sh | b
 
 nvm ls-remote
 nvm install v11.15.0
+nvm use v11.15.0
 
 그러고보면 노드버전이 너무 높으면 안되는것이 많다.
 
-gulp 실행하면 dist/*.js 가 만들어진다. dist 디렉토리아래에 있는걸 .gitignore 시키는 효율적인 방법은 TODO
+gulp 실행하면 dist/*.js 가 만들어진다. dist 디렉토리아래에 있는건 .gitignore 에 제외시키고 있다.
+public/board/adm/js/dist
+assets/desktop/js/dist
+assets/mobile/js/dist
+위 디렉토리의 .gitignore 파일에는 아래와 같이 되어있다.
+    *
+    !.gitignore
+
+실제 웹페이지에서는 다음과 같이 dist..js 를 호출하고있다.
+<script src="http://nhmotors.me/assets/js/dist/vendor.js"></script>
+<script src="http://nhmotors.me/assets/js/dist/app.js"></script> 
+<script src="http://nhmotors.me/assets/js/dist/desktop.js"></script> 
+
+
+########################
+# bower
+npm install bower
+자바스크립트, css 관리툴이다. 외부의존 라이브러리를 다운받아 사용하기가 매우 편리하다.
+❯ bower -version
+1.8.12
+bower install jquery
+bower install fontawesome
+이렇게 하면 bower_components 디렉토리가 생성이 되면서 그아래 파일들이 다운로드된다.
+bower_components/jquery 에 보면 bower.js 가 있는것을 확인할수있다.
+웹페이지에서는 아래와 같이 호출해서 쓰면된다.
+<script src="bower_components/jquery/dist/jquery.min.js"></script>
+<link rel="stylesheet" type="text/css" href="bower_components/fontawesome/css/fontawesome.min.css">
+
+bower.json 을 통해 종속성을 관리할수있다. 이 파일만 있으면 bower_components 디렉토리가 없더라도 다시 구성할수있다.
+bower install 하면된다.
+
 
 ########################
 # EJS
@@ -152,10 +182,6 @@ gulp 실행하면 dist/*.js 가 만들어진다. dist 디렉토리아래에 있�
 
 ########################
 # Blade
-
-
-########################
-# ES6
 
 
 npm & yarn & node & gulp & bower & elixer & mix
@@ -186,4 +212,67 @@ https://gseok.gitbooks.io/node-and-npm/content/node-npmc0ac-c6a9-c2dc-node-gyp-r
 
 #  webpack.mix.js
 
+################################################################
+# nginx.conf
+server {
+	listen	80;
+    server_name nhmotors.me;
 
+	root /Users/hong/prj/nhmotors/public ;
+	index  index.php index.html index.htm;
+
+    location / {
+		try_files $uri $uri/ /index.php?$query_string;
+    }
+    location /assets {
+		alias /Users/hong/prj/nhmotors/assets/desktop;
+    }
+    location ~ \.php$ {
+        fastcgi_pass   127.0.0.1:9000;
+        #fastcgi_index  index.php;
+        fastcgi_param  SCRIPT_FILENAME  $document_root$fastcgi_script_name;
+        include        fastcgi_params;
+    }
+}
+
+server {
+	listen	80;
+    server_name nhmotors.me;
+
+	root /Users/hong/prj/nhmotors/public ;
+	index  index.php index.html index.htm;
+
+    location / {
+		try_files $uri $uri/ /index.php?$query_string;
+    }
+    location /assets {
+		alias /Users/hong/prj/nhmotors/assets/desktop;
+    }
+    location ~ \.php$ {
+        fastcgi_pass   127.0.0.1:9000;
+        #fastcgi_index  index.php;
+        fastcgi_param  SCRIPT_FILENAME  $document_root$fastcgi_script_name;
+        include        fastcgi_params;
+    }
+}
+
+server {
+	listen	80;
+    server_name m.nhmotors.me;
+
+	root /Users/hong/prj/nhmotors/public ;
+	index  index.php index.html index.htm;
+
+    location / {
+		try_files $uri $uri/ /index.php?$query_string;
+    }
+    location /assets {
+		alias /Users/hong/prj/nhmotors/assets/mobile;
+    }
+    location ~ \.php$ {
+        fastcgi_pass   127.0.0.1:9000;
+        #fastcgi_index  index.php;
+        fastcgi_param  SCRIPT_FILENAME  $document_root$fastcgi_script_name;
+        include        fastcgi_params;
+    }
+}

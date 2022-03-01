@@ -1,0 +1,5 @@
+# 터미널  테마 설정 
+bash -c "$(wget -qO- https://git.io/vQgMr)"
+
+
+

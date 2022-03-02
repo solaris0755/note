@@ -1,0 +1,45 @@
+#####################################################
+# nginx + php-fpm7.4 Install Guide
+# ( Under Ubuntu 18 LTS )
+#####################################################
+
+
+# apt-get update
+# apt-get -y install software-properties-common 
+# add-apt-repository ppa:ondrej/php
+# apt-get update
+
+# apt-get install php7.4-mcrypt php7.4-cli php7.4-fpm php7.4-bcmath php7.4-bz2 php7.4-common php7.4-curl php7.4-dba php7.4-gd php7.4-json php7.4-mbstring php7.4-opcache php7.4-readline php7.4-soap php7.4-xml php7.4-xmlrpc php7.4-zip php7.4-ctype php7.4-pdo php7.4-redis php7.4-mysql php7.4-imagick php7.4-intl
+
+# vim /etc/php/7.4/fpm/php.ini
+
+# service php7.4-fpm restart
+
+# apt install nginx
+
+
+/* install utils */
+# apt install vim git curl subversion
+
+/* install npm, composer, node */
+# apt install npm composer
+
+/* ssh */
+# ssh-keygen
+
+
+/* nvm 설치 */
+# curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -
+
+/* Node 설치 */
+# apt install nodejs
+# node -v
+v12.22.10
+
+# npm install pm2@latest -g
+
+
+# TODO 
+node
+nginx
+composer

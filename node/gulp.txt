@@ -1,6 +1,8 @@
 # gulp 프로젝트 만들기
 
 https://www.youtube.com/watch?v=1rw9MfIleEg
+https://webclub.tistory.com/469
+TODO : 최신소스 찾기 , async 들어있는걸로
 
 
 ❯ mkdir gulp

@@ -1,0 +1,50 @@
+#####################################
+# mysql function debug 방법
+
+mysql 은 오라클처럼 디버깅이 불가능하다.
+그래서 다음과 같은 테이블을 만들어서 로그를 남기는 방식으로 디버깅을 할수있다.
+
+CREATE TABLE function_debug_log (
+    num INT NOT NULL PRIMARY KEY AUTO_INCREMENT ,
+    msg VARCHAR(1000),
+    DATETIME DATETIME
+);
+
+function 안에서 로그를 남긴다.
+
+create
+    definer = jbbuller@`%` function haversine(mygps varchar(120), workgps varchar(120)) returns int
+BEGIN
+    declare s_lat decimal(20, 8);
+    declare s_lng decimal(20, 8);
+    declare g_lat decimal(20, 8);
+    declare g_lng decimal(20, 8);
+    declare s_loc point;
+    declare g_loc point;
+    declare v_dis int;
+
+    # 요렇게 디버깅 로그를 남긴다.
+    insert into function_debug_log set msg=concat(mygps,',',workgps), datetime=now();
+
+    if instr(mygps,',')=0 or instr(workgps,',')=0 or trim(mygps)=',' then
+        return -1;
+    end if;
+
+
+    set s_lat = SUBSTRING_INDEX(mygps, ',', 1); -- 경도
+    set s_lng = SUBSTRING_INDEX(mygps, ',', -1); -- 위도
+    set g_lat = SUBSTRING_INDEX(workgps, ',', 1);
+    set g_lng = SUBSTRING_INDEX(workgps, ',', -1);
+
+    set s_loc = point(s_lng,s_lat);
+    set g_loc = point(g_lng,g_lat);
+    
+    select ST_DISTANCE_SPHERE(s_loc,g_loc)/1000
+#     SELECT 6371 * 2 * ASIN(SQRT(POWER(SIN((s_lat - g_lat) * PI() / 180 / 2), 2) +
+#                                 COS(52.2296756 * PI() / 180) * COS(52.406374 * PI() / 180) *
+#                                 POWER(SIN((s_long - g_long) * PI() / 180 / 2), 2))) as distance1
+    into v_dis
+    from dual;
+    return v_dis;
+END;
+

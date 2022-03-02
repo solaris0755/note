@@ -1,5 +1,7 @@
 # GPS 함수
 
+https://youngwoon.tistory.com/3
+
 geometry 데이터 타입 - GPS 위치정보를 저장하기위한 데이터타입이다.
 
 CREATE TABLE `zz` (

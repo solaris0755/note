@@ -1,0 +1,5 @@
+# pm2 를 사용하여 multi-node 실행
+https://devport.tistory.com/m/31
+
+기존에 여러 데몬들 ( 노드채팅, php 데몬 ) 이 있는데 노드 채팅은 pm2 로 관리 하고있었으나 php 데몬은 수동으로 관리하고있었음
+php 도 node 로 변환하여 pm2 로 관리되게끔 하자.

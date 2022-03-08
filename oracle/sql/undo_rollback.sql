@@ -1,0 +1,3 @@
+-- 언두영역을 활용하여 복구하기 900 초라면 15분이니깐 15분이내의 데이터는 복구가 가능하다.
+-- show parameter undo_retention
+-- insert into hr.emp select * from hr.emp as of timestamp (systimestamp - interval '15' minute) ;

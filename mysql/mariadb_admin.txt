@@ -1,0 +1,57 @@
+##################################################################
+# mariadb 인증방식 ( 유닉스소켓방식 )
+
+암호 없이 터미널에서 mysql 명령만 치면 바로 접속이 된다.
+❯ mysql
+Welcome to the MariaDB monitor.  Commands end with ; or \g.
+Your MariaDB connection id is 64
+Server version: 10.6.3-MariaDB Homebrew
+
+Copyright (c) 2000, 2018, Oracle, MariaDB Corporation Ab and others.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+MariaDB [(none)]> \s
+--------------
+mysql  Ver 15.1 Distrib 10.6.3-MariaDB, for osx10.16 (x86_64) using readline 5.1
+
+Connection id:		64
+Current database:
+Current user:		hong@localhost
+SSL:			Not in use
+Current pager:		less
+Using outfile:		''
+Using delimiter:	;
+Server:			MariaDB
+Server version:		10.6.3-MariaDB Homebrew
+Protocol version:	10
+Connection:		Localhost via UNIX socket
+Server characterset:	utf8mb4
+Db     characterset:	utf8mb4
+Client characterset:	utf8mb3
+Conn.  characterset:	utf8mb3
+UNIX socket:		/tmp/mysql.sock
+Uptime:			10 days 14 hours 36 min 13 sec
+
+Threads: 1  Questions: 472  Slow queries: 0  Opens: 32  Open tables: 25  Queries per second avg: 0.000
+--------------
+
+
+계정 정보를 보면 password 칼럼에 invaild 라는 값이 들어가 있다.
+mysql_native_password 는 암호 기반 인증 방식을 의미하며, Password에 invalid로 설정되어 있으면 plugin에 mysql_native_password로 설정되어 있어도 unix_socket 방식으로 로그인하게 된다.
+
+MariaDB [(none)]> select host,user,password,plugin from mysql.user;
++-----------+-------------+-------------------------------------------+-----------------------+
+| Host      | User        | Password                                  | plugin                |
++-----------+-------------+-------------------------------------------+-----------------------+
+| localhost | mariadb.sys |                                           | mysql_native_password |
+| localhost | root        |                                           | mysql_native_password |
+| localhost | hong        | invalid                                   | mysql_native_password |
+| %         | gnu         | *B4ED24274654A59A9D0C639C4DA9EBA414B887D8 | mysql_native_password |
++-----------+-------------+-------------------------------------------+-----------------------+
+
+유닉스 소켓방식이 아닌 암호기반 방식으로 접근 하려면 다음과 같이 하면된다.
+alter user hong@localhost identified via mysql_native_password USING PASSWORD("asdf1234");
+
+유닉스 소켓 방식으로 접근하려면 
+alter user hong@localhost identified via unix_socket;

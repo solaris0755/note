@@ -91,6 +91,7 @@ git checkout br1
 
 # 브랜치 전환하려는데 작업중인게 있다면 갈무리하기=>stash
 git stash
+git stash save 저장하고픈이름
 
 # 갈무리한거 복구하기
 git stash apply

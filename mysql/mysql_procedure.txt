@@ -1,17 +1,32 @@
 #####################################
 # mysql function debug 방법
+https://purumae.tistory.com/201
+
 
 mysql 은 오라클처럼 디버깅이 불가능하다.
-그래서 다음과 같은 테이블을 만들어서 로그를 남기는 방식으로 디버깅을 할수있다.
+그래서 테이블을 만들어서 로그를 남기는 방식으로 디버깅을 할수있다.
+하지만 에러가 발생시에 로그가 롤백이 되기때문에 에러당시의 로그를 볼수가 없다.
 
-CREATE TABLE function_debug_log (
-    num INT NOT NULL PRIMARY KEY AUTO_INCREMENT ,
-    msg VARCHAR(1000),
-    DATETIME DATETIME
-);
+
+CREATE TABLE `error_log` (
+    `error_log_id` SMALLINT(5) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '에러 로그 ID',
+    `proc_name` VARCHAR(100) NOT NULL COMMENT '프로시저 이름',
+    `proc_step` TINYINT(3) UNSIGNED NOT NULL COMMENT '프로시저 내에서 에러가 발생한 스텝 번호',
+    `sql_state` VARCHAR(5) NOT NULL COMMENT 'SQLSTATE',
+    `error_no` INT(11) NOT NULL COMMENT '에러 번호',
+    `error_msg` TEXT NOT NULL COMMENT '에러 메세지',
+    `call_stack` TEXT NULL COMMENT '프로시저 호출 파라미터',
+    `log_date` DATETIME(0) NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '로그 적재 일자',
+    PRIMARY KEY (`error_log_id`))
+ENGINE = InnoDB
+COMMENT = 'DB 런타임 에러 로그';
+
 
 function 안에서 로그를 남긴다.
+select haversine('555.1222,131.222222','37.6343872,126.92333329999997');
+이런식으로 호출하면 에러가 난다. 그때 select * from error_log 를 조회해보자.
 
+/*------- 함수 내부코드 --------*/
 create
     definer = jbbuller@`%` function haversine(mygps varchar(120), workgps varchar(120)) returns int
 BEGIN
@@ -23,13 +38,49 @@ BEGIN
     declare g_loc point;
     declare v_dis int;
 
-    # 요렇게 디버깅 로그를 남긴다.
-    insert into function_debug_log set msg=concat(mygps,',',workgps), datetime=now();
+    # 디버깅관련 변수
+#     - v_vch_proc_name : 현재 Stored Procedure의 이름
+#     - v_vch_proc_step : SQL Exception이 발생한 구문위 위치를 찾기 위해 사용합니다. 번거롭고 원시적이지만 긴 Stored Procedure를 디버깅해야할 때 유용합니다.
+#     - v_txt_call_stack : input parameter 값을 json 형태로 변환하여 담습니다. (5.6과의 호환을 위해 json 유형으로 선언하지 않습니다.)
+#     - v_vch_sql_state / v_int_error_no / v_txt_error_msg : GET DIAGNOSTICS 구문으로 얻는 SQL STATE, Error Number, Error Message 를 담을 변수
+    DECLARE v_vch_proc_name varchar(100) DEFAULT 'haversine';
+    DECLARE v_iny_proc_step tinyint UNSIGNED DEFAULT 0;
+    DECLARE v_txt_call_stack text;
+    DECLARE v_vch_sql_state varchar(5);
+    DECLARE v_int_error_no int;
+    DECLARE v_txt_error_msg text;
 
+    ######################
+    # 에러 핸들링
+    declare exit handler for  sqlexception
+        begin
+
+           # GET DIAGNOSTICS 구문으로 디버깅에 필요한 다음 세 가지 condition information 을 가져옵니다.
+           # - RETURNED_SQLSTATE
+           # - MYSQL_ERRNO
+           # - MESSAGE_TEXT
+            GET DIAGNOSTICS CONDITION 1 v_vch_sql_state = RETURNED_SQLSTATE
+                , v_int_error_no = MYSQL_ERRNO
+                , v_txt_error_msg = MESSAGE_TEXT;
+#             ROLLBACK;
+
+            # CallStack 추출 : input 파라미터값을 json 문자열로 만들어 변수에 담는다.
+            SET v_txt_call_stack = CONCAT('{"mygps":', coalesce(mygps,'null')
+                , ',"workgps":', coalesce(workgps,'null')
+                , '}'
+                );
+
+            INSERT error_log (proc_name, proc_step, sql_state, error_no, error_msg, call_stack, log_date)
+            VALUES (v_vch_proc_name, v_iny_proc_step, v_vch_sql_state, v_int_error_no, v_txt_error_msg, v_txt_call_stack, NOW(0));
+
+            return -9;
+        end;
+
+    ######################
+    # 기본 루틴 구현
     if instr(mygps,',')=0 or instr(workgps,',')=0 or trim(mygps)=',' then
         return -1;
     end if;
-
 
     set s_lat = SUBSTRING_INDEX(mygps, ',', 1); -- 경도
     set s_lng = SUBSTRING_INDEX(mygps, ',', -1); -- 위도
@@ -38,7 +89,7 @@ BEGIN
 
     set s_loc = point(s_lng,s_lat);
     set g_loc = point(g_lng,g_lat);
-    
+
     select ST_DISTANCE_SPHERE(s_loc,g_loc)/1000
 #     SELECT 6371 * 2 * ASIN(SQRT(POWER(SIN((s_lat - g_lat) * PI() / 180 / 2), 2) +
 #                                 COS(52.2296756 * PI() / 180) * COS(52.406374 * PI() / 180) *

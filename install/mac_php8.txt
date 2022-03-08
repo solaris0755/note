@@ -1,0 +1,44 @@
+
+brew install composer 했더니 php 가 8.1 로 업데이트 되었다.
+$ brew services restart php
+
+$ vim /usr/local/etc/php/8.1/php.ini 
+
+$ pecl install xdebug
+Installing '/usr/local/Cellar/php/8.1.3_1/pecl/20210902/xdebug.so'
+
+#######
+# php 7.4 를 추가로 설치해보자.
+$ brew reinstall php@7.4
+$ brew services start php@7.4
+
+
+$ brew services stop php
+$ brew services stop php@7.4
+
+## 한서버에 php 두개 띄우려면 nginx 랑 통신하는 포트를 달리해줘야한다.
+$ vim /usr/local/etc/php/7.4/php-fpm.d/www.conf
+listen = 127.0.0.1:9074 로 변경
+
+$ vim /usr/local/etc/php/8.1/php-fpm.d/www.conf
+listen = 127.0.0.1:9081 로 변경
+
+## nginx 설정도 변경해준다. 7.4 또는 8.1 을 선택적으로 지정해준다.
+
+
+$ brew services start php
+$ brew services start php@7.4
+
+brew services restart php
+brew services restart php@7.4
+brew services restart nginx
+
+❯ ps -ef|grep php-fpm
+  501 86962     1   0  9:07AM ??         0:00.09 /usr/local/opt/php@7.4/sbin/php-fpm --nodaemonize
+  501 86964 86962   0  9:07AM ??         0:00.00 /usr/local/opt/php@7.4/sbin/php-fpm --nodaemonize
+  501 86965 86962   0  9:07AM ??         0:00.00 /usr/local/opt/php@7.4/sbin/php-fpm --nodaemonize
+  501 87113     1   0  9:07AM ??         0:00.07 php-fpm: master process (/usr/local/etc/php/8.1/php-fpm.conf)
+  501 87117 87113   0  9:07AM ??         0:00.00 php-fpm: pool www
+  501 87118 87113   0  9:07AM ??         0:00.00 php-fpm: pool www
+
+

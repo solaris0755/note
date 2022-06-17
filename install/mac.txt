@@ -291,3 +291,22 @@ eclipse : https://www.eclipse.org/downloads/download.php?file=/oomph/epp/2021-06
 [ python ]
 $ brew install --build-from-source python@3.9
 
+
+[ selenium ]
+셀레니움 다운로드
+wget https://selenium-release.storage.googleapis.com/3.141/selenium-server-standalone-3.141.0.jar
+
+셀레니움 실행
+❯ java -jar selenium-server-standalone-3.141.0.jar
+10:48:05.788 INFO [GridLauncherV3.parse] - Selenium server version: 3.141.0, revision: 2ecb7d9a
+10:48:05.891 INFO [GridLauncherV3.lambda$buildLaunchers$3] - Launching a standalone Selenium Server on port 4444
+2022-06-16 10:48:05.994:INFO::main: Logging initialized @811ms to org.seleniumhq.jetty9.util.log.StdErrLog
+10:48:06.259 INFO [WebDriverServlet.<init>] - Initialising WebDriverServlet
+10:48:06.346 INFO [SeleniumServer.boot] - Selenium Server is up and running on port 4444
+
+
+크롬드라이버 설치
+brew install --cask chromedriver
+
+실행할수 없다는 에러가 나오면
+xattr -d com.apple.quarantine chromedriver

@@ -1,0 +1,8 @@
+# 기존 라라벨에 adminLTE UI 템플릿을 결합한다.
+
+https://github.com/jeroennoten/Laravel-AdminLTE/wiki/Installation
+
+composer require jeroennoten/laravel-adminlte
+
+# 사용방법 설명서
+https://github.com/jeroennoten/Laravel-AdminLTE/wiki/Basic-Configuration

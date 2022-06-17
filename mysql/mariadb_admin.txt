@@ -55,3 +55,13 @@ alter user hong@localhost identified via mysql_native_password USING PASSWORD("a
 
 유닉스 소켓 방식으로 접근하려면 
 alter user hong@localhost identified via unix_socket;
+
+##################################################################
+# mariadb 원격접속 허용
+/etc/mysql/mariadb.conf.d/50-server.cnf
+
+bind-address            = 127.0.0.1 를 주석처리하고
+bind-address	  = 0.0.0.0 을 추가한다. 다음과 같이
+
+#bind-address            = 127.0.0.1 
+bind-address	  = 0.0.0.0

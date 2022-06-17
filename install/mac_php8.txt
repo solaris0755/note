@@ -42,3 +42,8 @@ brew services restart nginx
   501 87118 87113   0  9:07AM ??         0:00.00 php-fpm: pool www
 
 
+# php7.4 를 기본으로 쓰고 싶다면 
+brew link --overwrite --force php@7.4
+
+.zshrc 에 아래 내용 추가 
+export PATH="/usr/local/opt/php@7.4/sbin:$PATH"

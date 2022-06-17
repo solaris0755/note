@@ -63,7 +63,7 @@ nvm use 9.11.2
 nvm install 9.11.2
 node -v
 */
-
+nvm install 14.19.3
 
 #####################################################
 # jbbuller setting
@@ -79,3 +79,4 @@ $ vi datas/dbconfig.php
 
 
 
+service php7.4-fpm restart

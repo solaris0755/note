@@ -1,3 +1,16 @@
+# vim ~/.gitconfig 설정
+[alias]
+	co = checkout
+	ci = commit
+	st = status
+    s = status -s
+[user]
+	name = hong
+	email = solaris1@naver.com
+[core]
+	autocrlf = input
+	quotepath = false
+
 # 명령어 단축
 git config --global alias.co checkout
 git config --global alias.ci commit
@@ -73,6 +86,9 @@ git ci  하면 vi 에디터 뜨면 편집후 저장
 git checkout branch
 git merge master
 
+merge 를 취소하고싶을땐
+git merge --abort
+
 
 # remote 저장소 보기
 git remote -v
@@ -89,6 +105,15 @@ git branch br1
 # 브랜치 전환
 git checkout br1
 
+# 브랜치를 리모트에 푸시
+git push origin br1
+
+# 리모트 브랜치 삭제
+git push origin --delete release
+
+# 로컬 브랜치 삭제
+git branch -D release
+
 # 브랜치 전환하려는데 작업중인게 있다면 갈무리하기=>stash
 git stash
 git stash save 저장하고픈이름
@@ -103,5 +128,6 @@ git stash clear (모두지우기)
 # stash 이름변경
 git stash drop stash@{0}
 git stash store -m "_car_order_list_done 테이블 삭제작업" 19c8fa4d418c1c7ad9abd38e59ae12eeaf8b8ebd
+
 
 

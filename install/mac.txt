@@ -17,23 +17,8 @@ git clone git://github.com/zsh-users/zsh-autosuggestions $ZSH_CUSTOM/plugins/zsh
 plugins=(git zsh-syntax-highlighting zsh-autosuggestions)
 
 # neovim 설치
-brew install neovim
-brew tap homebrew/cask-fonts # 개발용 폰트 설치
+brew install vim
 
-~/.zshrc
-alias vim="nvim"
-alias vi="nvim"
-alias vimdiff="nvim -d"
-export EDITOR=/usr/local/bin/nvim
-
-# vim 플러그인
-curl -sLf https://spacevim.org/install.sh | bash
-설치가 완료되면 vi를 실행합니다. 최초 실행 시 mode 설정을 물어보고 (잘모르면 1을 누릅니다) q를 눌러 종료했다가 다시 실행하면 자동으로 플러그인을 설치합니다. 플러그인이 많아서 시간이 꽤 걸립니다.
-
-/Users/hong/.SpaceVim.d/init.toml
-
-[options]
-default_indent = 4
 
 
 

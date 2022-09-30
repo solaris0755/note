@@ -1,3 +1,12 @@
+# 라라벨 설치후에 auth 모듈 추가, TODO : DB 도 처리해야한다. 
+composer require laravel/ui
+php artisan ui:auth
+php artisan ui bootstrap
+npm install
+npm run dev
+npm run dev
+
+
 # 기존 라라벨에 adminLTE UI 템플릿을 결합한다.
 
 https://github.com/jeroennoten/Laravel-AdminLTE/wiki/Installation
@@ -6,3 +15,11 @@ composer require jeroennoten/laravel-adminlte
 
 # 사용방법 설명서
 https://github.com/jeroennoten/Laravel-AdminLTE/wiki/Basic-Configuration
+
+
+
+# adminLTE 의 기본 페이지를 세팅한다.
+php artisan adminlte:install --type=full --with=main_views
+
+
+

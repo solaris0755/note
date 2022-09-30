@@ -1,0 +1,20 @@
+composer create-project --prefer-dist laravel/laravel lar
+git init
+git add .
+git commit -m ‘init’ .
+
+composer require laravel/ui
+php artisan ui vue --auth
+npm install
+
+# app.js app.css 생성
+npm run dev  
+
+# 테이블 생성
+php artisan migrate
+
+# 팅커에서 가짜 데이터 만들기
+❯ php artisan tinker
+Psy Shell v0.11.8 (PHP 7.4.30 — cli) by Justin Hileman
+>>> App\Models\User::factory(10)->create();
+

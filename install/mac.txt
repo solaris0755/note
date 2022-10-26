@@ -11,20 +11,15 @@ chmod -R go-w '/usr/local/share/zsh'
 # zsh 플러그인 설치
 brew install zsh-completions fasd
 git clone https://github.com/zsh-users/zsh-syntax-highlighting.git $ZSH_CUSTOM/plugins/zsh-syntax-highlighting
-git clone git://github.com/zsh-users/zsh-autosuggestions $ZSH_CUSTOM/plugins/zsh-autosuggestions
+git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
 
 ~/.zshrc 를 열어서 다음과 같이 변경하여 활성화시켜준다.
 plugins=(git zsh-syntax-highlighting zsh-autosuggestions)
 
 # neovim 설치
-brew install vim
-
-
-
-
-# fzf 설치 
-brew install fzf
-~/.zshrc 에서 plugin 에 fzf 추가
+brew install neovim
+~/.zshrc 를 열어서 다음과 같이 변경하여 활성화시켜준다.
+alias vi="nvim"
 
 
 

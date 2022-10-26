@@ -130,4 +130,15 @@ git stash drop stash@{0}
 git stash store -m "_car_order_list_done 테이블 삭제작업" 19c8fa4d418c1c7ad9abd38e59ae12eeaf8b8ebd
 
 
+################
+# github 용 ssh-key 별도등록하는법
+config 파일에 아래와 같이 추가
+Host github
+	User git
+	Hostname github.com
+	identityfile ~/.ssh/jb.pem
+
+그리고 아래와 같이 remote add 한다.
+git remote add origin git@github:solaris0755/note.git
+
 

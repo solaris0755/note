@@ -16,6 +16,8 @@ $ brew services start php@7.4
 $ brew services stop php
 $ brew services stop php@7.4
 
+$ brew services restart php
+
 ## 한서버에 php 두개 띄우려면 nginx 랑 통신하는 포트를 달리해줘야한다.
 $ vim /usr/local/etc/php/7.4/php-fpm.d/www.conf
 listen = 127.0.0.1:9074 로 변경
@@ -44,6 +46,12 @@ brew services restart nginx
 
 # php7.4 를 기본으로 쓰고 싶다면 
 brew link --overwrite --force php@7.4
+
+# php8.1 로 다시 원복 하려면 
+brew unlink php && brew link php
+
+# xdebug 설치
+pecl install xdebug
 
 .zshrc 에 아래 내용 추가 
 export PATH="/usr/local/opt/php@7.4/sbin:$PATH"

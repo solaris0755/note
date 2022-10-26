@@ -2,6 +2,7 @@
 http://juhyunsik.blogspot.kr/2012/05/mysql-replication.html
 
 grant replication slave on *.* to 'slave'@'172.%' identified by '';
+grant replication slave on *.* to 'slave'@'218.155.122.218' identified by '';
 
 
 mysql> show master status\G

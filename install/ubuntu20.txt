@@ -80,3 +80,11 @@ $ vi datas/dbconfig.php
 
 
 service php7.4-fpm restart
+
+
+#####################################################
+# netdata install
+#####################################################
+bash <(curl -Ss https://my-netdata.io/kickstart.sh)
+설치후 넷데이터 로그인후 connect nodes 메뉴 들어가서 스크립트 복사한후 서버에서 실행
+
